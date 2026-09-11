@@ -1,0 +1,80 @@
+[
+  {
+    "id": 1,
+    "ts": "2026-07-30T14:21:03Z",
+    "src_ip": "10.0.1.47",
+    "dst_ip": "185.220.101.45",
+    "username": "sarah.chen",
+    "device_id": "LAPTOP-SC7291",
+    "event_type": "C2_Beacon",
+    "severity": "Critical",
+    "bytes_out": 47230,
+    "port": 443,
+    "process": "svchost.exe"
+  },
+  {
+    "id": 2,
+    "ts": "2026-07-30T14:21:47Z",
+    "src_ip": "10.0.1.83",
+    "dst_ip": "91.108.4.182",
+    "username": "marcus.wright",
+    "device_id": "WORKST-MW0034",
+    "event_type": "Data_Exfil",
+    "severity": "High",
+    "bytes_out": 2304512,
+    "port": 8443,
+    "process": "python3"
+  },
+  {
+    "id": 3,
+    "ts": "2026-07-30T14:22:15Z",
+    "src_ip": "10.0.1.47",
+    "dst_ip": "10.0.1.83",
+    "username": "sarah.chen",
+    "device_id": "LAPTOP-SC7291",
+    "event_type": "Lateral_Movement",
+    "severity": "High",
+    "bytes_out": 8192,
+    "port": 445,
+    "process": "ntlmssp"
+  },
+  {
+    "id": 4,
+    "ts": "2026-07-30T14:22:58Z",
+    "src_ip": "10.0.1.121",
+    "dst_ip": "104.21.64.0",
+    "username": "amir.hassan",
+    "device_id": "LAPTOP-AH4490",
+    "event_type": "DNS_Tunneling",
+    "severity": "High",
+    "bytes_out": 12345,
+    "port": 53,
+    "process": "named"
+  },
+  {
+    "id": 5,
+    "ts": "2026-07-30T14:23:31Z",
+    "src_ip": "10.0.1.83",
+    "dst_ip": "203.0.113.99",
+    "username": "marcus.wright",
+    "device_id": "WORKST-MW0034",
+    "event_type": "Persistence_Install",
+    "severity": "Critical",
+    "bytes_out": 524288,
+    "port": 80,
+    "process": "curl"
+  },
+  {
+    "id": 6,
+    "ts": "2026-07-30T14:24:02Z",
+    "src_ip": "10.0.1.200",
+    "dst_ip": "185.220.101.45",
+    "username": "priya.nair",
+    "device_id": "LAPTOP-PN6621",
+    "event_type": "Cred_Harvesting",
+    "severity": "Medium",
+    "bytes_out": 2048,
+    "port": 443,
+    "process": "chrome"
+  }
+]

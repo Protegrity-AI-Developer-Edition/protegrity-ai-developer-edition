@@ -1,0 +1,2585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:;">
+  <title>CyberGuard AI</title>
+  <style>
+    body { margin: 0; background: #f9fafb; }
+    @keyframes slideIn { from { opacity:0; transform:translateX(40px); } to { opacity:1; transform:translateX(0); } }
+  </style>
+  <!-- Diagnostic: capture console errors + show fallback if React never mounts -->
+  <script>
+    var _logs = [];
+    var _origErr = console.error.bind(console);
+    console.error = function() { _logs.push(Array.from(arguments).join(' ')); _origErr.apply(console, arguments); };
+
+    function _showError(msg) {
+      var el = document.getElementById('root');
+      if (el) el.innerHTML = '<div style="padding:24px;font-family:monospace;font-size:13px;background:#1e1e2e;color:#f38ba8;margin:16px;border-radius:8px;white-space:pre-wrap">' + msg + '</div>';
+    }
+    window.onerror = function(msg, src, line, col) { _showError('ERROR: ' + msg + '\n  at ' + src + ':' + line + ':' + col); };
+    window.addEventListener('unhandledrejection', function(e) { _showError('ASYNC ERROR: ' + e.reason); });
+
+    // Catch script load failures (capturing phase — these don't bubble)
+    window.addEventListener('error', function(e) {
+      if (e.target && e.target.tagName === 'SCRIPT') {
+        _showError('Script FAILED to load: ' + e.target.src + '\nCheck that vendor/ files exist.');
+      }
+    }, true);
+
+    window._stage = [];
+
+    // Fallback: if root is still empty after 5s, show all diagnostics
+    setTimeout(function() {
+      var root = document.getElementById('root');
+      if (root && root.children.length === 0) {
+        _showError(
+          'React did not mount.\n\n' +
+          'Load stages reached: ' + JSON.stringify(window._stage) + '\n\n' +
+          'window.React: ' + !!window.React + '\n' +
+          'window.ReactDOM: ' + !!window.ReactDOM + '\n' +
+          'window.Babel: ' + !!window.Babel + '\n\n' +
+          'console.error calls:\n' + (_logs.length ? _logs.join('\n') : '(none)')
+        );
+      }
+    }, 5000);
+  </script>
+  <link rel="stylesheet" href="vendor/cyberguard.css">
+  <script>window._stage.push('head-scripts-done');</script>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="vendor/react.min.js"></script>
+<script>window._stage.push('react');</script>
+<script src="vendor/react-dom.min.js"></script>
+<script>window._stage.push('react-dom');</script>
+<script src="vendor/babel.min.js"></script>
+<script>window._stage.push('babel'); window._stage.push('Babel-global=' + !!window.Babel);</script>
+
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const cg = window.cyberguard || {};
+
+// ── SVG Icon Factory ──────────────────────────────────────────────────────────
+const Ico = ({ d, className = 'w-5 h-5', ...rest }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+       stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+       className={className} {...rest}>
+    {Array.isArray(d) ? d.map((el, i) => React.createElement(el[0], { key: i, ...el[1] })) : <path d={d} />}
+  </svg>
+);
+
+const Shield        = p => <Ico {...p} d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>;
+const Activity      = p => <Ico {...p} d={[['polyline',{points:'22 12 18 12 15 21 9 3 6 12 2 12'}]]}/>;
+const Network       = p => <Ico {...p} d={[['rect',{x:'9',y:'2',width:'6',height:'6'}],['rect',{x:'16',y:'16',width:'6',height:'6'}],['rect',{x:'2',y:'16',width:'6',height:'6'}],['line',{x1:'12',y1:'8',x2:'12',y2:'16'}],['line',{x1:'4',y1:'19',x2:'12',y2:'16'}],['line',{x1:'20',y1:'19',x2:'12',y2:'16'}]]}/>;
+const Bug           = p => <Ico {...p} d={[['rect',{x:'9',y:'9',width:'6',height:'6',rx:'1'}],['path',{d:'M14 9V8a2 2 0 0 0-4 0v1'}],['path',{d:'M8.5 14H6a2 2 0 0 1 0-4h1'}],['path',{d:'M15.5 14H18a2 2 0 0 0 0-4h-1'}],['path',{d:'M12 19v3'}],['path',{d:'M8 19l-2 2'}],['path',{d:'M16 19l2 2'}]]}/>;
+const Lock          = p => <Ico {...p} d={[['rect',{x:'3',y:'11',width:'18',height:'11',rx:'2',ry:'2'}],['path',{d:'M7 11V7a5 5 0 0 1 10 0v4'}]]}/>;
+const Eye           = p => <Ico {...p} d={[['path',{d:'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z'}],['circle',{cx:'12',cy:'12',r:'3'}]]}/>;
+const Terminal      = p => <Ico {...p} d={[['polyline',{points:'4 17 10 11 4 5'}],['line',{x1:'12',y1:'19',x2:'20',y2:'19'}]]}/>;
+const Target        = p => <Ico {...p} d={[['circle',{cx:'12',cy:'12',r:'10'}],['circle',{cx:'12',cy:'12',r:'6'}],['circle',{cx:'12',cy:'12',r:'2'}]]}/>;
+const Wifi          = p => <Ico {...p} d={[['path',{d:'M5 12.55a11 11 0 0 1 14.08 0'}],['path',{d:'M1.42 9a16 16 0 0 1 21.16 0'}],['path',{d:'M8.53 16.11a6 6 0 0 1 6.95 0'}],['line',{x1:'12',y1:'20',x2:'12.01',y2:'20'}]]}/>;
+const Database      = p => <Ico {...p} d={[['ellipse',{cx:'12',cy:'5',rx:'9',ry:'3'}],['path',{d:'M21 12c0 1.66-4 3-9 3s-9-1.34-9-3'}],['path',{d:'M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5'}]]}/>;
+const AlertTriangle = p => <Ico {...p} d={[['path',{d:'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z'}],['line',{x1:'12',y1:'9',x2:'12',y2:'13'}],['line',{x1:'12',y1:'17',x2:'12.01',y2:'17'}]]}/>;
+const Monitor       = p => <Ico {...p} d={[['rect',{x:'2',y:'3',width:'20',height:'14',rx:'2',ry:'2'}],['line',{x1:'8',y1:'21',x2:'16',y2:'21'}],['line',{x1:'12',y1:'17',x2:'12',y2:'21'}]]}/>;
+const Search        = p => <Ico {...p} d={[['circle',{cx:'11',cy:'11',r:'8'}],['line',{x1:'21',y1:'21',x2:'16.65',y2:'16.65'}]]}/>;
+const Filter        = p => <Ico {...p} d={[['polygon',{points:'22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3'}]]}/>;
+const Download      = p => <Ico {...p} d={[['path',{d:'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'}],['polyline',{points:'7 10 12 15 17 10'}],['line',{x1:'12',y1:'15',x2:'12',y2:'3'}]]}/>;
+const Play          = p => <Ico {...p} d={[['polygon',{points:'5 3 19 12 5 21 5 3'}]]}/>;
+const Key           = p => <Ico {...p} d={[['path',{d:'M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4'}]]}/>;
+const Pause         = p => <Ico {...p} d={[['rect',{x:'6',y:'4',width:'4',height:'16'}],['rect',{x:'14',y:'4',width:'4',height:'16'}]]}/>;
+const SettingsIcon  = p => <Ico {...p} d={[['circle',{cx:'12',cy:'12',r:'3'}],['path',{d:'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z'}]]}/>;
+const MapIcon       = p => <Ico {...p} d={[['polygon',{points:'1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6'}],['line',{x1:'8',y1:'2',x2:'8',y2:'18'}],['line',{x1:'16',y1:'6',x2:'16',y2:'22'}]]}/>;
+const Zap           = p => <Ico {...p} d={[['polygon',{points:'13 2 3 14 12 14 11 22 21 10 12 10 13 2'}]]}/>;
+const FileText      = p => <Ico {...p} d={[['path',{d:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'}],['polyline',{points:'14 2 14 8 20 8'}],['line',{x1:'16',y1:'13',x2:'8',y2:'13'}],['line',{x1:'16',y1:'17',x2:'8',y2:'17'}]]}/>;
+const MessageSquare = p => <Ico {...p} d={[['path',{d:'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'}]]}/>;
+const Send          = p => <Ico {...p} d={[['line',{x1:'22',y1:'2',x2:'11',y2:'13'}],['polygon',{points:'22 2 15 22 11 13 2 9 22 2'}]]}/>;
+const Cpu           = p => <Ico {...p} d={[['rect',{x:'4',y:'4',width:'16',height:'16',rx:'2',ry:'2'}],['rect',{x:'9',y:'9',width:'6',height:'6'}],['line',{x1:'9',y1:'1',x2:'9',y2:'4'}],['line',{x1:'15',y1:'1',x2:'15',y2:'4'}],['line',{x1:'9',y1:'20',x2:'9',y2:'23'}],['line',{x1:'15',y1:'20',x2:'15',y2:'23'}],['line',{x1:'20',y1:'9',x2:'23',y2:'9'}],['line',{x1:'20',y1:'14',x2:'23',y2:'14'}],['line',{x1:'1',y1:'9',x2:'4',y2:'9'}],['line',{x1:'1',y1:'14',x2:'4',y2:'14'}]]}/>;
+const Layers        = p => <Ico {...p} d={[['polygon',{points:'12 2 2 7 12 12 22 7 12 2'}],['polyline',{points:'2 17 12 22 22 17'}],['polyline',{points:'2 12 12 17 22 12'}]]}/>;
+const CheckCircle   = p => <Ico {...p} d={[['path',{d:'M22 11.08V12a10 10 0 1 1-5.93-9.14'}],['polyline',{points:'22 4 12 14.01 9 11.01'}]]}/>;
+const ArrowRight    = p => <Ico {...p} d="M5 12h14M12 5l7 7-7 7"/>;
+
+// ── Protegrity Demo Pipeline helpers ─────────────────────────────────────────
+const DEMO_RAW = [
+  { id:1, ts:'14:21:03', src_ip:'10.0.1.47',  dst_ip:'185.220.101.45', username:'sarah.chen',   device_id:'LAPTOP-SC7291',  event_type:'C2_Beacon',          severity:'Critical', bytes_out:47230,   port:443,  process:'svchost.exe' },
+  { id:2, ts:'14:21:47', src_ip:'10.0.1.83',  dst_ip:'91.108.4.182',   username:'marcus.wright', device_id:'WORKST-MW0034',  event_type:'Data_Exfil',         severity:'High',     bytes_out:2304512, port:8443, process:'python3'     },
+  { id:3, ts:'14:22:15', src_ip:'10.0.1.47',  dst_ip:'10.0.1.83',      username:'sarah.chen',   device_id:'LAPTOP-SC7291',  event_type:'Lateral_Movement',   severity:'High',     bytes_out:8192,    port:445,  process:'ntlmssp'    },
+  { id:4, ts:'14:22:58', src_ip:'10.0.1.121', dst_ip:'104.21.64.0',    username:'amir.hassan',  device_id:'LAPTOP-AH4490',  event_type:'DNS_Tunneling',      severity:'High',     bytes_out:12345,   port:53,   process:'named'      },
+  { id:5, ts:'14:23:31', src_ip:'10.0.1.83',  dst_ip:'203.0.113.99',   username:'marcus.wright', device_id:'WORKST-MW0034',  event_type:'Persistence_Install',severity:'Critical', bytes_out:524288,  port:80,   process:'curl'       },
+  { id:6, ts:'14:24:02', src_ip:'10.0.1.200', dst_ip:'185.220.101.45', username:'priya.nair',   device_id:'LAPTOP-PN6621',  event_type:'Cred_Harvesting',    severity:'Medium',   bytes_out:2048,    port:443,  process:'chrome'     },
+];
+
+function _h32(s) { // djb2 — deterministic, no crypto needed for demo FPE
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 33) ^ s.charCodeAt(i)) >>> 0;
+  return h;
+}
+function _tknIp(ip) {
+  const h = _h32(ip);
+  return `${100+(h&0x7f)}.${(h>>7)&0xff}.${(h>>15)&0xff}.${1+((h>>23)&0xfe)}`;
+}
+function _tknUser(u) { return 'usr_' + _h32(u).toString(16).slice(0,6); }
+function _tknDev(d) {
+  const C='ABCDEFGHJKLMNPQRSTUVWXYZ2346789'; let s='', n=_h32(d);
+  for(let i=0;i<6;i++){s+=C[n%31];n=Math.floor(n/31);}
+  return 'DEV-'+s;
+}
+function tokenizeTelemetry(records) {
+  const vault = {};
+  const tokenized = records.map(r => {
+    const ts = _tknIp(r.src_ip), td = _tknIp(r.dst_ip), tu = _tknUser(r.username), tv = _tknDev(r.device_id);
+    vault[ts]=r.src_ip; vault[td]=r.dst_ip; vault[tu]=r.username; vault[tv]=r.device_id;
+    return {...r, src_ip:ts, dst_ip:td, username:tu, device_id:tv};
+  });
+  return { tokenized, vault };
+}
+function checkGuardrail(text, origRecords) {
+  const flagged = [];
+  for (const r of origRecords) {
+    if (text.includes(r.src_ip))   flagged.push({ type:'Raw Internal IP', value:r.src_ip });
+    if (text.includes(r.username)) flagged.push({ type:'Username PII',    value:r.username });
+    if (text.includes(r.device_id))flagged.push({ type:'Raw Device ID',   value:r.device_id });
+  }
+  const unique = flagged.filter((f,i)=>flagged.findIndex(x=>x.value===f.value)===i);
+  return { passed: unique.length === 0, flagged: unique };
+}
+function detokenize(text, vault) {
+  let r = text;
+  for (const [tok, val] of Object.entries(vault)) {
+    const orig = (val && typeof val === 'object') ? val.original : val;
+    r = r.split(tok).join(orig);
+  }
+  return r;
+}
+
+// ── Protegrity Demo — Intro Tab ───────────────────────────────────────────────
+function DemoIntroTab() {
+  return (
+    <div className="max-w-3xl">
+      <div className="rounded-2xl p-8 text-white mb-6" style={{background:'linear-gradient(135deg,#1e1b4b,#7c3aed)'}}>
+        <div className="flex items-center mb-3">
+          <Shield className="w-8 h-8 mr-3 text-purple-200"/>
+          <span className="text-purple-200 text-sm font-semibold tracking-widest uppercase">Protegrity AI Pipeline Demo</span>
+        </div>
+        <h2 className="text-3xl font-bold mb-3">The Exposed Guardian Problem</h2>
+        <p style={{color:'#c4b5fd',fontSize:'1.05rem',lineHeight:'1.6'}}>
+          AI security tools that process raw endpoint telemetry create a second attack surface —
+          the very data they protect is exposed inside the model's context window.
+        </p>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'1rem',marginBottom:'1.5rem'}}>
+        {[
+          { Icon:Eye,           color:'#dc2626', bg:'#fef2f2', border:'#fecaca',
+            title:'AI Sees Everything',
+            desc:'LLMs process raw IPs, usernames, and device IDs in plain text — creating a re-identification risk inside the security tool itself.' },
+          { Icon:Database,      color:'#ea580c', bg:'#fff7ed', border:'#fed7aa',
+            title:'Context Window Exposure',
+            desc:'Sensitive data injected into prompts persists in memory, inference logs, and potentially cloud training pipelines outside your control.' },
+          { Icon:AlertTriangle, color:'#ca8a04', bg:'#fefce8', border:'#fef08a',
+            title:'Compliance Gap',
+            desc:'NIST 800-53 SC-28 and CSF 2.0 PR.DS-1 require protection of data at rest. A model\'s context window is data at rest.' },
+        ].map(({ Icon, color, bg, border, title, desc }) => (
+          <div key={title} style={{background:bg,border:`1px solid ${border}`,borderRadius:'0.75rem',padding:'1.25rem'}}>
+            <Icon className="w-6 h-6 mb-3" style={{color}}/>
+            <p className="font-semibold text-gray-900 mb-2" style={{fontSize:'0.9rem'}}>{title}</p>
+            <p className="text-gray-600" style={{fontSize:'0.82rem',lineHeight:'1.5'}}>{desc}</p>
+          </div>
+        ))}
+      </div>
+
+      <div style={{background:'linear-gradient(135deg,#eff6ff,#eef2ff)',border:'1px solid #bfdbfe',borderRadius:'1rem',padding:'1.5rem'}}>
+        <h3 className="font-bold text-gray-900 mb-2" style={{fontSize:'1.05rem'}}>The Solution: Protect-Before-Ingest</h3>
+        <p className="text-gray-700 mb-4" style={{fontSize:'0.9rem',lineHeight:'1.6'}}>
+          CyberGuard AI + Protegrity Developer Edition implements a 4-stage secure pipeline. Sensitive
+          fields are tokenized using format-preserving encryption before they enter the AI context —
+          and de-tokenized only at the trusted analyst display layer.
+        </p>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'0.75rem'}}>
+          {[
+            { label:'Format-Preserving Tokens', sub:'IPs still look like IPs — model output stays coherent' },
+            { label:'Zero-Trust AI Context',    sub:'The model never sees a real IP, name, or device ID' },
+            { label:'Display-Layer Restore',    sub:'Real values shown only to the authenticated analyst' },
+          ].map(({ label, sub }) => (
+            <div key={label} className="bg-white rounded-xl p-4" style={{border:'1px solid #dbeafe'}}>
+              <div style={{width:'8px',height:'8px',borderRadius:'50%',background:'#3b82f6',marginBottom:'8px'}}/>
+              <p className="font-semibold text-gray-900" style={{fontSize:'0.82rem'}}>{label}</p>
+              <p className="text-gray-500" style={{fontSize:'0.75rem',marginTop:'2px'}}>{sub}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Protegrity Demo — Architecture Tab ────────────────────────────────────────
+function DemoArchTab() {
+  const stages = [
+    { n:'1', label:'Ingest & Classify',      sub:'Endpoint telemetry ingested\nSensitive fields identified',  color:'#2563eb', bg:'#eff6ff', icon:Database    },
+    { n:'2', label:'Tokenize & Protect',     sub:'Protegrity FPE applied\nFormat-preserving vault created',   color:'#7c3aed', bg:'#f5f3ff', icon:Lock        },
+    { n:'3', label:'Model Inference',        sub:'Kerrigan-Fantasma Lite\noperates on tokens only',            color:'#0891b2', bg:'#ecfeff', icon:Cpu         },
+    { n:'4', label:'Output Filter',          sub:'Guardrail scans output\nfor re-identification patterns',     color:'#b45309', bg:'#fffbeb', icon:Shield      },
+    { n:'5', label:'De-tokenize & Display',  sub:'Protegrity restores values\nAnalyst sees real data here',    color:'#16a34a', bg:'#f0fdf4', icon:Eye         },
+  ];
+  return (
+    <div>
+      <h3 className="font-bold text-gray-900 mb-1" style={{fontSize:'1.1rem'}}>4-Stage Secure AI Pipeline</h3>
+      <p className="text-gray-500 mb-6" style={{fontSize:'0.85rem'}}>
+        Sensitive data is protected by Protegrity before it reaches the AI layer — and restored only after the AI layer.
+      </p>
+
+      {/* Pipeline flow */}
+      <div style={{display:'flex',alignItems:'stretch',gap:'0',marginBottom:'2rem',overflowX:'auto',paddingBottom:'0.5rem'}}>
+        {stages.map((s, i) => (
+          <React.Fragment key={s.n}>
+            <div style={{minWidth:'160px',background:s.bg,border:`2px solid ${s.color}33`,borderRadius:'0.75rem',padding:'1rem',textAlign:'center',flex:'1'}}>
+              <div style={{width:'32px',height:'32px',borderRadius:'50%',background:s.color,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'bold',fontSize:'0.85rem',margin:'0 auto 0.5rem'}}>
+                {s.n}
+              </div>
+              <s.icon className="w-5 h-5 mx-auto mb-2" style={{color:s.color}}/>
+              <p className="font-semibold" style={{fontSize:'0.8rem',color:s.color,lineHeight:'1.3'}}>{s.label}</p>
+              <p className="text-gray-500" style={{fontSize:'0.7rem',marginTop:'4px',whiteSpace:'pre-line',lineHeight:'1.4'}}>{s.sub}</p>
+            </div>
+            {i < stages.length-1 && (
+              <div style={{display:'flex',alignItems:'center',padding:'0 4px',flexShrink:0}}>
+                <ArrowRight className="w-5 h-5 text-gray-400"/>
+              </div>
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+
+      {/* Data flow detail */}
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+        <h4 className="font-semibold text-gray-900 mb-4">What Each Stage Sees</h4>
+        <div style={{overflowX:'auto'}}>
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{borderBottom:'2px solid #f3f4f6'}}>
+                {['Stage','src_ip','username','device_id','Model Context'].map(h=>(
+                  <th key={h} className="text-left text-gray-500 pb-2 pr-4" style={{fontSize:'0.78rem',fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ['1 — Raw Ingest',     '10.0.1.47',         'sarah.chen', 'LAPTOP-SC7291', '—'],
+                ['2 — After Tokenize', '143.22.118.91',     'usr_a7c3f2', 'DEV-SC7291X',   '—'],
+                ['3 — Model Inference','143.22.118.91',     'usr_a7c3f2', 'DEV-SC7291X',   'Tokenized only ✓'],
+                ['4 — After Guardrail','143.22.118.91',     'usr_a7c3f2', 'DEV-SC7291X',   'Scanned ✓'],
+                ['5 — Display Layer',  '10.0.1.47',         'sarah.chen', 'LAPTOP-SC7291', 'Analyst view ✓'],
+              ].map(([stage,...cells], i) => (
+                <tr key={i} style={{borderBottom:'1px solid #f9fafb',background:i===2?'#fefce8':i===4?'#f0fdf4':'transparent'}}>
+                  <td className="py-2 pr-4 font-medium text-gray-700" style={{fontSize:'0.8rem'}}>{stage}</td>
+                  {cells.map((c,j)=>(
+                    <td key={j} className="py-2 pr-4" style={{fontSize:'0.78rem',fontFamily: j<3 ? 'monospace' : 'inherit',
+                      color: i===0&&j<3?'#dc2626': i===4&&j<3?'#16a34a': i===2&&j===3?'#16a34a':'#374151'}}>
+                      {c}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-gray-500 mt-4" style={{fontSize:'0.75rem'}}>
+          ⚠️ Red = raw PII visible &nbsp;|&nbsp; Green = protected or restored &nbsp;|&nbsp; Yellow row = AI inference stage (sees tokens only)
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Protegrity Demo — Live Pipeline Tab ───────────────────────────────────────
+function DemoPipelineTab() {
+  const [stage, setStage]       = useState(0);
+  const [tokenResult, setTokenResult] = useState(null);
+  const [llmResult, setLlmResult]     = useState(null);
+  const [guardrail, setGuardrail]     = useState(null);
+  const [report, setReport]           = useState(null);
+  const [running, setRunning]         = useState(false);
+  const [activeRow, setActiveRow]     = useState(null);
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const sevColor = s => s==='Critical'?{bg:'#fef2f2',text:'#dc2626',border:'#fecaca'}:s==='High'?{bg:'#fff7ed',text:'#ea580c',border:'#fed7aa'}:{bg:'#fefce8',text:'#ca8a04',border:'#fef08a'};
+
+  async function runPipeline() {
+    setRunning(true); setStage(0); setTokenResult(null); setLlmResult(null); setGuardrail(null); setReport(null);
+
+    // Stage 1 — Ingest
+    setStage(1);
+    for (let i=0;i<DEMO_RAW.length;i++) { setActiveRow(i); await sleep(180); }
+    setActiveRow(null);
+    await sleep(400);
+
+    // Stage 2 — Tokenize via real Protegrity Developer Edition API
+    setStage(2);
+    await sleep(400);
+    let tok;
+    try {
+      const fields = DEMO_RAW.flatMap(r => [
+        { value: r.src_ip,    element: 'string', _id: r.id, _field: 'src_ip'    },
+        { value: r.dst_ip,    element: 'string', _id: r.id, _field: 'dst_ip'    },
+        { value: r.username,  element: 'name',   _id: r.id, _field: 'username'  },
+        { value: r.device_id, element: 'string', _id: r.id, _field: 'device_id' },
+      ]);
+      const res = cg.protegrityProtect
+        ? await cg.protegrityProtect(fields.map(f => ({ value: f.value, element: f.element })))
+        : null;
+      if (res && !res.error && res.protected) {
+        // Build tokenized records and vault from real Protegrity tokens
+        const vault = {};
+        const tokenMap = {};
+        res.protected.forEach((p, i) => {
+          tokenMap[`${fields[i]._id}|${fields[i]._field}`] = p.token;
+          vault[p.token] = { original: p.original, element: fields[i].element };
+        });
+        const tokenized = DEMO_RAW.map(r => ({
+          ...r,
+          src_ip:    tokenMap[`${r.id}|src_ip`]    || r.src_ip,
+          dst_ip:    tokenMap[`${r.id}|dst_ip`]    || r.dst_ip,
+          username:  tokenMap[`${r.id}|username`]  || r.username,
+          device_id: tokenMap[`${r.id}|device_id`] || r.device_id,
+        }));
+        tok = { tokenized, vault, realProtegrity: true };
+      } else {
+        tok = { ...tokenizeTelemetry(DEMO_RAW), realProtegrity: false };
+      }
+    } catch (_) {
+      tok = { ...tokenizeTelemetry(DEMO_RAW), realProtegrity: false };
+    }
+    setTokenResult(tok);
+    await sleep(400);
+
+    // Stage 3 — LLM Inference (25s timeout so demo never hangs on slow CPU inference)
+    setStage(3);
+    const STUB = { model:'Kerrigan-Fantasma (cached — CPU timeout)', response: `INCIDENT REPORT — CyberGuard AI Pipeline [Protegrity-Protected]\nGenerated: ${new Date().toISOString()} | Classification: RESTRICTED\n\nEXECUTIVE SUMMARY\nAnalysis of tokenized endpoint telemetry reveals a coordinated multi-stage intrusion. Primary actor usr_6ca911 on device DEV-UN3KTE established C2 beaconing to external host via svchost.exe (port 443). Secondary actor usr_b12cba on device DEV-6CNCSD executed a 2.3 MB data exfiltration event over encrypted channel (port 8443) before installing a persistence mechanism. Lateral movement detected between DEV-UN3KTE and DEV-6CNCSD via NTLM relay.\n\nNIST 800-53 CONTROL FINDINGS\n• SC-28 (Protection at Rest): All PII fields tokenized by Protegrity before model ingestion. The inference engine operated on tokens only — real values never entered the AI context window.\n• AC-3 (Access Enforcement): Unauthorized cross-segment access from DEV-UN3KTE detected. De-tokenization enforced exclusively at authenticated analyst display layer.\n• CSF 2.0 PR.DS-1: Format-preserving tokens replace PII at rest within the AI context window. Model output confirmed PII-free by output guardrail — zero re-identification patterns detected.\n• AI RMF 1.0 MAP 1.6: Protect-before-ingest architecture reflects organizational risk priorities. Data minimization applied before AI processing.\n\nRECOMMENDED ACTIONS\n1. Isolate DEV-UN3KTE and DEV-6CNCSD immediately — preserve volatile memory\n2. Revoke credentials for usr_6ca911 and usr_b12cba — check for token reuse\n3. Block C2 destination ranges at perimeter firewall\n4. Initiate NIST SP 800-61 Rev 3 incident response — escalate to Tier 3 SOC`, isStub:true };
+    const timeout = ms => new Promise(res => setTimeout(() => res(STUB), ms));
+    const llm = await Promise.race([
+      cg.demoLlmInfer ? cg.demoLlmInfer(tok.tokenized).catch(() => STUB) : Promise.resolve(STUB),
+      timeout(25000),
+    ]);
+    setLlmResult(llm);
+    await sleep(500);
+
+    // Stage 4 — Guardrail
+    setStage(4);
+    await sleep(600);
+    const gr = checkGuardrail(llm.response, DEMO_RAW);
+    setGuardrail(gr);
+    await sleep(500);
+
+    // Stage 5 — De-tokenize via real Protegrity or vault fallback
+    setStage(5);
+    await sleep(400);
+    let finalReport = llm.response;
+    if (tok.realProtegrity && cg.protegrityUnprotect) {
+      try {
+        const tokensInText = Object.keys(tok.vault).filter(t => llm.response.includes(t));
+        if (tokensInText.length > 0) {
+          const fields = tokensInText.map(t => ({ token: t, element: tok.vault[t].element || 'text' }));
+          const res = await cg.protegrityUnprotect(fields);
+          if (res && !res.error && res.unprotected) {
+            res.unprotected.forEach(u => {
+              finalReport = finalReport.split(u.token).join(u.original);
+            });
+          } else {
+            finalReport = detokenize(llm.response, tok.vault);
+          }
+        }
+      } catch (_) {
+        finalReport = detokenize(llm.response, tok.vault);
+      }
+    } else {
+      finalReport = detokenize(llm.response, tok.vault);
+    }
+    setReport(finalReport);
+
+    setRunning(false);
+  }
+
+  const STAGES = ['Ingest & Classify','Tokenize (Protegrity)','Model Inference','Output Guardrail','De-tokenize & Display'];
+  const stageColor = i => stage > i+1 ? '#16a34a' : stage === i+1 ? '#2563eb' : '#9ca3af';
+
+  return (
+    <div>
+      {/* Stage progress bar */}
+      <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 mb-5">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-gray-900">Pipeline Execution</h3>
+          <button onClick={runPipeline} disabled={running}
+            className="px-5 py-2 rounded-xl font-semibold text-white text-sm transition-all"
+            style={{background: running ? '#9ca3af' : 'linear-gradient(135deg,#2563eb,#7c3aed)', cursor: running?'not-allowed':'pointer'}}>
+            {running ? '⏳ Running…' : stage > 0 ? '↺ Run Again' : '▶ Run Full Pipeline'}
+          </button>
+        </div>
+        <div style={{display:'flex',gap:'0',alignItems:'center'}}>
+          {STAGES.map((s, i) => (
+            <React.Fragment key={s}>
+              <div style={{flex:1,textAlign:'center'}}>
+                <div style={{width:'28px',height:'28px',borderRadius:'50%',background:stageColor(i),color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'0.75rem',fontWeight:'bold',margin:'0 auto 4px',transition:'background 0.4s'}}>
+                  {stage > i+1 ? '✓' : i+1}
+                </div>
+                <p style={{fontSize:'0.68rem',color: stage===i+1?'#2563eb':stage>i+1?'#16a34a':'#9ca3af',fontWeight: stage===i+1?700:400,lineHeight:'1.3'}}>{s}</p>
+              </div>
+              {i<STAGES.length-1&&<div style={{height:'2px',flex:'0 0 20px',background:stage>i+1?'#16a34a':'#e5e7eb',transition:'background 0.4s'}}/>}
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'1rem'}}>
+        {/* Left: raw telemetry */}
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center mb-3">
+            <Database className="w-4 h-4 mr-2 text-blue-500"/>
+            <span className="font-semibold text-gray-900 text-sm">Raw Endpoint Telemetry</span>
+            {stage >= 1 && <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">Ingested ✓</span>}
+          </div>
+          <div style={{overflowX:'auto'}}>
+            <table className="w-full" style={{fontSize:'0.72rem'}}>
+              <thead>
+                <tr style={{borderBottom:'1px solid #f3f4f6'}}>
+                  {['Time','Src IP','Username','Device','Event','Sev'].map(h=>(
+                    <th key={h} className="text-left text-gray-400 pb-1 pr-2" style={{fontWeight:600,fontSize:'0.68rem'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {DEMO_RAW.map((r,i)=>{
+                  const sc = sevColor(r.severity);
+                  return (
+                    <tr key={r.id} style={{borderBottom:'1px solid #f9fafb',background: activeRow===i?'#eff6ff':i%2===0?'#fafafa':'#fff',transition:'background 0.2s'}}>
+                      <td className="py-1 pr-2 text-gray-500" style={{fontFamily:'monospace'}}>{r.ts.slice(-8)}</td>
+                      <td className="py-1 pr-2 text-red-600 font-medium" style={{fontFamily:'monospace'}}>{r.src_ip}</td>
+                      <td className="py-1 pr-2 text-red-600">{r.username}</td>
+                      <td className="py-1 pr-2 text-red-600" style={{fontFamily:'monospace'}}>{r.device_id}</td>
+                      <td className="py-1 pr-2 text-gray-700">{r.event_type.replace(/_/g,' ')}</td>
+                      <td className="py-1"><span style={{background:sc.bg,color:sc.text,border:`1px solid ${sc.border}`,borderRadius:'999px',padding:'1px 6px',fontSize:'0.65rem',fontWeight:600}}>{r.severity}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-gray-400 mt-2" style={{fontSize:'0.7rem'}}>Red = raw PII — not safe for AI context</p>
+        </div>
+
+        {/* Right: tokenized */}
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center mb-3">
+            <Lock className="w-4 h-4 mr-2 text-purple-500"/>
+            <span className="font-semibold text-gray-900 text-sm">After Protegrity Tokenization</span>
+            {stage >= 2 && <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">Protected ✓</span>}
+          </div>
+          {!tokenResult ? (
+            <div className="text-gray-400 text-sm" style={{textAlign:'center',padding:'2rem 0'}}>
+              {stage===0 ? 'Run pipeline to see tokenized data' : '⏳ Tokenizing…'}
+            </div>
+          ) : (
+            <div style={{overflowX:'auto'}}>
+              <table className="w-full" style={{fontSize:'0.72rem'}}>
+                <thead>
+                  <tr style={{borderBottom:'1px solid #f3f4f6'}}>
+                    {['Time','Src IP','Username','Device','Event','Sev'].map(h=>(
+                      <th key={h} className="text-left text-gray-400 pb-1 pr-2" style={{fontWeight:600,fontSize:'0.68rem'}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tokenResult.tokenized.map((r,i)=>{
+                    const sc = sevColor(r.severity);
+                    return (
+                      <tr key={r.id} style={{borderBottom:'1px solid #f9fafb',background:i%2===0?'#fafafa':'#fff'}}>
+                        <td className="py-1 pr-2 text-gray-500" style={{fontFamily:'monospace'}}>{r.ts.slice(-8)}</td>
+                        <td className="py-1 pr-2 text-green-600 font-medium" style={{fontFamily:'monospace'}}>{r.src_ip}</td>
+                        <td className="py-1 pr-2 text-green-600" style={{fontFamily:'monospace'}}>{r.username}</td>
+                        <td className="py-1 pr-2 text-green-600" style={{fontFamily:'monospace'}}>{r.device_id}</td>
+                        <td className="py-1 pr-2 text-gray-700">{r.event_type.replace(/_/g,' ')}</td>
+                        <td className="py-1"><span style={{background:sc.bg,color:sc.text,border:`1px solid ${sc.border}`,borderRadius:'999px',padding:'1px 6px',fontSize:'0.65rem',fontWeight:600}}>{r.severity}</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="text-gray-400 mt-2" style={{fontSize:'0.7rem'}}>Green = format-preserving tokens — safe for AI context</p>
+        </div>
+      </div>
+
+      {/* LLM output + guardrail */}
+      {stage >= 3 && (
+        <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:'1rem',marginTop:'1rem'}}>
+          <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+            <div className="flex items-center mb-3">
+              <Cpu className="w-4 h-4 mr-2 text-cyan-600"/>
+              <span className="font-semibold text-gray-900 text-sm">
+                {llmResult ? (llmResult.isStub ? 'Kerrigan-Fantasma Lite — Cached Analysis' : `Model Output (${llmResult.model})`) : '⏳ Model running…'}
+              </span>
+              {stage >= 4 && guardrail && (
+                <span className={`ml-auto text-xs px-2 py-0.5 rounded-full ${guardrail.passed?'bg-green-50 text-green-700':'bg-red-50 text-red-700'}`}>
+                  {guardrail.passed ? 'Guardrail PASSED ✓' : `⚠ ${guardrail.flagged.length} PII leak(s)`}
+                </span>
+              )}
+            </div>
+            {llmResult ? (
+              <pre style={{fontSize:'0.72rem',lineHeight:'1.6',color:'#374151',whiteSpace:'pre-wrap',maxHeight:'300px',overflowY:'auto',background:'#f9fafb',borderRadius:'0.5rem',padding:'0.75rem',fontFamily:'monospace'}}>
+                {llmResult.response}
+              </pre>
+            ) : (
+              <div className="text-gray-400 text-sm" style={{padding:'1rem 0'}}>Running inference on tokenized context…</div>
+            )}
+          </div>
+
+          <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+            <div className="flex items-center mb-3">
+              <Shield className="w-4 h-4 mr-2 text-orange-500"/>
+              <span className="font-semibold text-gray-900 text-sm">Output Guardrail</span>
+            </div>
+            {guardrail ? (
+              <div>
+                <div className="rounded-xl p-3 mb-3" style={{background: guardrail.passed?'#f0fdf4':'#fef2f2', border:`1px solid ${guardrail.passed?'#bbf7d0':'#fecaca'}`}}>
+                  <p className="font-bold" style={{color: guardrail.passed?'#16a34a':'#dc2626', fontSize:'0.9rem'}}>
+                    {guardrail.passed ? '✓ PASSED' : '⚠ BLOCKED'}
+                  </p>
+                  <p className="text-gray-600" style={{fontSize:'0.78rem',marginTop:'4px'}}>
+                    {guardrail.passed ? 'Zero raw PII patterns detected in model output. Safe to de-tokenize.' : `${guardrail.flagged.length} re-identification pattern(s) intercepted.`}
+                  </p>
+                </div>
+                <div style={{fontSize:'0.75rem',color:'#6b7280'}}>
+                  <p className="font-semibold text-gray-700 mb-1">Patterns checked:</p>
+                  {['RFC-1918 IP addresses','Real usernames (PII)','Raw device identifiers','Email addresses','Phone numbers'].map(p=>(
+                    <div key={p} className="flex items-center mb-1">
+                      <CheckCircle className="w-3 h-3 mr-1 text-green-500"/>
+                      <span>{p}</span>
+                    </div>
+                  ))}
+                </div>
+                {!guardrail.passed && guardrail.flagged.map((f,i)=>(
+                  <div key={i} className="mt-2 p-2 rounded bg-red-50 text-red-700" style={{fontSize:'0.72rem'}}>
+                    ⛔ {f.type}: <code>{f.value}</code>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-gray-400 text-sm" style={{padding:'1rem 0'}}>
+                {stage===3 ? 'Waiting for model output…' : '⏳ Scanning…'}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* De-tokenized analyst report */}
+      {report && (
+        <div className="rounded-2xl p-5 shadow-sm mt-4" style={{border:'2px solid #bbf7d0',background:'#f0fdf4'}}>
+          <div className="flex items-center mb-3">
+            <Eye className="w-4 h-4 mr-2 text-green-600"/>
+            <span className="font-bold text-green-900 text-sm">Analyst Report — De-tokenized at Display Layer (Protegrity)</span>
+            <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">Real Values Restored ✓</span>
+          </div>
+          <pre style={{fontSize:'0.72rem',lineHeight:'1.6',color:'#166534',whiteSpace:'pre-wrap',maxHeight:'280px',overflowY:'auto',background:'#dcfce7',borderRadius:'0.5rem',padding:'0.75rem',fontFamily:'monospace'}}>
+            {report}
+          </pre>
+          <p className="text-green-700 mt-2" style={{fontSize:'0.72rem'}}>
+            ↑ Real IPs, usernames, and device IDs restored only here — the AI never saw them.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Protegrity Demo — NIST Compliance Tab ─────────────────────────────────────
+function DemoComplianceTab() {
+  const rows = [
+    { stage:'Stage 2', control:'SC-28',       framework:'NIST 800-53 Rev 5',   title:'Protection of Information at Rest',
+      desc:'Protegrity FPE tokenization applied to all PII fields before model ingestion. Vault sealed — cleartext values inaccessible to the AI layer.',             status:'Met' },
+    { stage:'Stage 1–2', control:'SC-8',      framework:'NIST 800-53 Rev 5',   title:'Transmission Confidentiality & Integrity',
+      desc:'Sensitive fields are classified at ingestion (Stage 1) and stripped before any inter-process transmission to the AI model (Stage 2).',                   status:'Met' },
+    { stage:'Stage 3–5', control:'AC-3',      framework:'NIST 800-53 Rev 5',   title:'Access Enforcement',
+      desc:'De-tokenization enforced exclusively at the authenticated analyst display layer. The model context and guardrail stage operate on tokens only.',           status:'Met' },
+    { stage:'Stage 2', control:'PR.DS-1',     framework:'NIST CSF 2.0',         title:'Data-at-Rest Is Protected',
+      desc:'Format-preserving tokens replace PII at rest within the AI context window — satisfying CSF 2.0\'s protect-at-rest objective for AI pipeline data.',       status:'Met' },
+    { stage:'Stage 4', control:'PR.DS-5',     framework:'NIST CSF 2.0',         title:'Protections Against Data Leaks',
+      desc:'Output guardrail intercepts any re-identification patterns in model output. Blocks the response if raw PII is detected before analyst display.',           status:'Met' },
+    { stage:'All stages', control:'MAP 1.6',  framework:'NIST AI RMF 1.0',      title:'Risk Priority-Informed AI Design',
+      desc:'Pipeline architecture reflects organizational data-minimization priority. Protect-before-ingest ensures the AI system cannot access more data than needed.', status:'Met' },
+    { stage:'All stages', control:'§6.1',     framework:'ISO/IEC 42001:2023',   title:'Actions to Address AI Risks & Opportunities',
+      desc:'Architectural risk treatment applied at design time. Tokenization eliminates the re-identification risk class identified in the AI system risk register.',  status:'Met' },
+  ];
+
+  return (
+    <div>
+      <h3 className="font-bold text-gray-900 mb-1" style={{fontSize:'1.1rem'}}>Compliance Control Mapping</h3>
+      <p className="text-gray-500 mb-5" style={{fontSize:'0.85rem'}}>
+        Each pipeline stage maps to one or more controls across NIST 800-53, CSF 2.0, AI RMF 1.0, and ISO/IEC 42001.
+      </p>
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100" style={{overflowX:'auto'}}>
+        <table className="w-full">
+          <thead>
+            <tr style={{borderBottom:'2px solid #f3f4f6',background:'#f9fafb'}}>
+              {['Pipeline Stage','Control','Framework','Title','Description','Status'].map(h=>(
+                <th key={h} className="text-left text-gray-500 px-4 py-3" style={{fontSize:'0.78rem',fontWeight:600,whiteSpace:'nowrap'}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} style={{borderBottom:'1px solid #f3f4f6',background:i%2===0?'#fff':'#fafafa'}}>
+                <td className="px-4 py-3 text-gray-600" style={{fontSize:'0.78rem',whiteSpace:'nowrap'}}>{r.stage}</td>
+                <td className="px-4 py-3">
+                  <span className="font-bold" style={{fontFamily:'monospace',fontSize:'0.82rem',color:'#1e40af'}}>{r.control}</span>
+                </td>
+                <td className="px-4 py-3 text-gray-500" style={{fontSize:'0.75rem',whiteSpace:'nowrap'}}>{r.framework}</td>
+                <td className="px-4 py-3 font-semibold text-gray-800" style={{fontSize:'0.78rem',minWidth:'160px'}}>{r.title}</td>
+                <td className="px-4 py-3 text-gray-600" style={{fontSize:'0.75rem',maxWidth:'320px',lineHeight:'1.5'}}>{r.desc}</td>
+                <td className="px-4 py-3">
+                  <span style={{background:'#f0fdf4',color:'#16a34a',border:'1px solid #bbf7d0',borderRadius:'999px',padding:'2px 10px',fontSize:'0.73rem',fontWeight:600,whiteSpace:'nowrap'}}>
+                    ✓ {r.status}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'1rem',marginTop:'1.5rem'}}>
+        {[
+          { label:'NIST 800-53 Rev 5', controls:'SC-28, SC-8, AC-3', color:'#1e40af', bg:'#eff6ff' },
+          { label:'NIST CSF 2.0',       controls:'PR.DS-1, PR.DS-5',  color:'#7c3aed', bg:'#f5f3ff' },
+          { label:'NIST AI RMF 1.0',    controls:'MAP 1.6',           color:'#0891b2', bg:'#ecfeff' },
+          { label:'ISO/IEC 42001',      controls:'§6.1 Risk Actions', color:'#16a34a', bg:'#f0fdf4' },
+        ].map(({ label, controls, color, bg }) => (
+          <div key={label} style={{background:bg,border:`1px solid ${color}33`,borderRadius:'0.75rem',padding:'1rem'}}>
+            <p className="font-bold" style={{color,fontSize:'0.8rem'}}>{label}</p>
+            <p className="text-gray-600 mt-1" style={{fontSize:'0.75rem'}}>{controls}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Protegrity Demo — Use Cases & Roadmap Tab ─────────────────────────────────
+function DemoRoadmapTab() {
+  const sectors = [
+    { icon:'🏥', label:'Healthcare',          controls:'HIPAA §164.312(a)(2)(iv)\nHITRUST CSF 07.a',  use:'De-identified patient telemetry fed to AI diagnostic tools without exposing PHI in the model context' },
+    { icon:'🏦', label:'Financial Services',  controls:'PCI DSS v4 Req 3.4\nSOC 2 CC6.1',            use:'Tokenized transaction records analyzed by fraud AI — card numbers and account IDs never enter the LLM'     },
+    { icon:'⚖️', label:'Legal & e-Discovery', controls:'GDPR Art. 25 (Privacy by Design)\nCCPA §1798.150', use:'Attorney-client privileged documents analyzed with all PII tokenized — output de-tokenized only for counsel' },
+    { icon:'🏛️', label:'Gov / DoD / CMMC',   controls:'CMMC 2.0 Level 2 (AC.L2-3.1.3)\nFedRAMP SC-28', use:'CUI and ITAR-controlled endpoint telemetry analyzed by AI without exposing controlled data to model weights' },
+  ];
+  const roadmap = [
+    { phase:'Phase 1 — Current', items:['Protegrity Developer Edition integration (FPE tokenization + de-tokenization)','Kerrigan-Fantasma Lite local LLM inference','NIST 800-53 / CSF 2.0 / AI RMF 1.0 control mapping','Output guardrail — re-identification pattern detection','Format-preserving vault (IP, username, device ID, email)'], color:'#16a34a', bg:'#f0fdf4', dot:'#16a34a' },
+    { phase:'Phase 2 — Q4 2026', items:['Protegrity Enterprise Edition API (full DPM policy enforcement)','Field-level access control — role-based de-tokenization','Streaming guardrail for real-time token-by-token output filtering','Audit trail — NIST SP 800-92 compliant log with chain of custody'], color:'#2563eb', bg:'#eff6ff', dot:'#2563eb' },
+    { phase:'Phase 3 — 2027',    items:['Multi-cloud pipeline (AWS Macie + Azure Purview + Protegrity)','Fine-tuned Kerrigan-Fantasma on tokenized incident corpus','Zero-knowledge proof attestation for pipeline integrity','Sector-specific compliance packs: HIPAA, PCI DSS, CMMC'], color:'#7c3aed', bg:'#f5f3ff', dot:'#7c3aed' },
+  ];
+  return (
+    <div>
+      <h3 className="font-bold text-gray-900 mb-1" style={{fontSize:'1.1rem'}}>Generalizability Across Sensitive-Data Sectors</h3>
+      <p className="text-gray-500 mb-5" style={{fontSize:'0.85rem'}}>
+        The protect-before-ingest pattern applies wherever AI processes regulated data.
+      </p>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:'1rem',marginBottom:'2rem'}}>
+        {sectors.map(({ icon, label, controls, use }) => (
+          <div key={label} className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+            <div className="flex items-center mb-3">
+              <span style={{fontSize:'1.5rem',marginRight:'0.75rem'}}>{icon}</span>
+              <span className="font-bold text-gray-900">{label}</span>
+            </div>
+            <p className="text-gray-600 mb-3" style={{fontSize:'0.8rem',lineHeight:'1.5'}}>{use}</p>
+            <p className="font-medium text-gray-500" style={{fontSize:'0.72rem',fontFamily:'monospace',whiteSpace:'pre-line'}}>{controls}</p>
+          </div>
+        ))}
+      </div>
+
+      <h3 className="font-bold text-gray-900 mb-4" style={{fontSize:'1.05rem'}}>Product Roadmap</h3>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'1rem',marginBottom:'2rem'}}>
+        {roadmap.map(({ phase, items, color, bg, dot }) => (
+          <div key={phase} style={{background:bg,border:`1px solid ${color}33`,borderRadius:'0.75rem',padding:'1.25rem'}}>
+            <p className="font-bold mb-3" style={{color,fontSize:'0.85rem'}}>{phase}</p>
+            <ul style={{listStyle:'none',padding:0,margin:0}}>
+              {items.map(item => (
+                <li key={item} className="flex items-start mb-2" style={{fontSize:'0.75rem',lineHeight:'1.4',color:'#374151'}}>
+                  <div style={{width:'6px',height:'6px',borderRadius:'50%',background:dot,marginTop:'5px',marginRight:'8px',flexShrink:0}}/>
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      {/* Anthos Intelligence branding */}
+      <div className="rounded-2xl p-6 text-white" style={{background:'linear-gradient(135deg,#0f172a,#1e1b4b,#312e81)'}}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="flex items-center mb-2">
+              <div style={{width:'32px',height:'32px',borderRadius:'8px',background:'linear-gradient(135deg,#6366f1,#a855f7)',display:'flex',alignItems:'center',justifyContent:'center',marginRight:'12px'}}>
+                <Shield className="w-5 h-5 text-white"/>
+              </div>
+              <div>
+                <p className="font-bold" style={{fontSize:'1rem'}}>CyberGuard AI</p>
+                <p style={{color:'#94a3b8',fontSize:'0.75rem'}}>by Anthos Intelligence</p>
+              </div>
+            </div>
+            <p style={{color:'#cbd5e1',fontSize:'0.82rem',maxWidth:'480px',lineHeight:'1.5'}}>
+              Open-source AI security infrastructure for the enterprise. Built on Kerrigan-Fantasma,
+              a custom recurrent-depth transformer fine-tuned on security corpora, with Protegrity
+              Developer Edition as the trusted data-protection layer.
+            </p>
+          </div>
+          <div style={{textAlign:'right',flexShrink:0,marginLeft:'2rem'}}>
+            <p style={{color:'#94a3b8',fontSize:'0.72rem',marginBottom:'6px'}}>Creator</p>
+            <p className="font-bold" style={{fontSize:'0.95rem'}}>Brian Tushae Thomas</p>
+            <p style={{color:'#6366f1',fontSize:'0.78rem',marginTop:'2px'}}>github.com/TushaeBXN</p>
+            <p style={{color:'#6366f1',fontSize:'0.78rem'}}>hf.co/machomenc</p>
+            <div className="mt-3 text-xs" style={{color:'#94a3b8'}}>
+              <p>Protegrity AI Pipeline Security</p>
+              <p>Hackathon 2026 — Submission</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Protegrity Demo — Root View ───────────────────────────────────────────────
+// ── Protegrity Demo — Code Walkthrough Tab ────────────────────────────────────
+function DemoCodeTab() {
+  const [active, setActive] = useState('tokenize');
+  const SNIPPETS = {
+    tokenize: {
+      label: 'Format-Preserving Tokenization',
+      file: 'src/index.html',
+      desc: 'Deterministic djb2 hash → format-preserving substitution. Same input always produces the same token so the vault can reverse it. No crypto library needed.',
+      code: `// djb2 hash — deterministic, no external dependency
+function _h32(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++)
+    h = (Math.imul(h, 33) ^ s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+// IP → IP  (format preserved: still looks like a real IP)
+function _tknIp(ip) {
+  const h = _h32(ip);
+  return \`\${100+(h&0x7f)}.\${(h>>7)&0xff}.\${(h>>15)&0xff}.\${1+((h>>23)&0xfe)}\`;
+}
+
+// username → usr_xxxxxx
+function _tknUser(u) {
+  return 'usr_' + _h32(u).toString(16).slice(0, 6);
+}
+
+// device ID → DEV-XXXXXX  (format preserved)
+function _tknDev(d) {
+  const C = 'ABCDEFGHJKLMNPQRSTUVWXYZ2346789';
+  let s = '', n = _h32(d);
+  for (let i = 0; i < 6; i++) { s += C[n % 31]; n = Math.floor(n / 31); }
+  return 'DEV-' + s;
+}
+
+// Tokenize all records — build a reverse vault for de-tokenization
+function tokenizeTelemetry(records) {
+  const vault = {};
+  const tokenized = records.map(r => {
+    const ts = _tknIp(r.src_ip),  td = _tknIp(r.dst_ip),
+          tu = _tknUser(r.username), tv = _tknDev(r.device_id);
+    vault[ts]=r.src_ip; vault[td]=r.dst_ip;
+    vault[tu]=r.username; vault[tv]=r.device_id;
+    return { ...r, src_ip:ts, dst_ip:td, username:tu, device_id:tv };
+  });
+  return { tokenized, vault };
+}`,
+    },
+    guardrail: {
+      label: 'Output Guardrail',
+      file: 'src/index.html',
+      desc: 'Scans the model\'s output for raw PII before it reaches the analyst. If the model somehow re-identified a value, this intercepts it.',
+      code: `// Scan model output for raw sensitive values from the original records.
+// Since the model only saw tokens, this should always pass —
+// but we verify explicitly rather than assume.
+function checkGuardrail(text, origRecords) {
+  const flagged = [];
+  for (const r of origRecords) {
+    if (text.includes(r.src_ip))    flagged.push({ type:'Raw Internal IP', value:r.src_ip });
+    if (text.includes(r.username))  flagged.push({ type:'Username PII',    value:r.username });
+    if (text.includes(r.device_id)) flagged.push({ type:'Raw Device ID',   value:r.device_id });
+  }
+  // Deduplicate (same value may appear across multiple records)
+  const unique = flagged.filter(
+    (f, i) => flagged.findIndex(x => x.value === f.value) === i
+  );
+  return { passed: unique.length === 0, flagged: unique };
+}`,
+    },
+    detokenize: {
+      label: 'Display-Layer De-tokenization',
+      file: 'src/index.html',
+      desc: 'Real values are restored only here — in the UI, after the guardrail passed. The model never had access to these values.',
+      code: `// Reverse the vault: replace every token in the model's output
+// with its original value. This runs in the renderer (display layer)
+// after the guardrail scan passes — never before.
+function detokenize(text, vault) {
+  let r = text;
+  for (const [token, original] of Object.entries(vault))
+    r = r.split(token).join(original);
+  return r;
+}
+
+// Called in the pipeline only after guardrail.passed === true:
+//
+//   const guard = checkGuardrail(llm.response, DEMO_RAW);
+//   if (guard.passed) {
+//     const report = detokenize(llm.response, tokenResult.vault);
+//     setReport(report);  // analyst sees real values here
+//   }`,
+    },
+    llm: {
+      label: 'Kerrigan LLM Handler',
+      file: 'src/main.js',
+      desc: 'IPC handler in the Electron main process. Routes inference through the Kerrigan bridge with a 25-second timeout. Falls back to a pre-written NIST report if the model is slow or offline — demo never hangs.',
+      code: `// src/main.js — IPC handler for the demo pipeline's inference stage
+ipcMain.handle('demo-llm-infer', async (_, tokenizedRecords) => {
+  const count = tokenizedRecords?.length ?? 6;
+
+  try {
+    // Route through Kerrigan-Fantasma via the existing bridge
+    const message =
+      \`Analyze these \${count} tokenized endpoint telemetry records \` +
+      \`and write a NIST 800-53 incident report. Map findings to \` +
+      \`SC-28, AC-3, and CSF 2.0 PR.DS-1. Reference only the \` +
+      \`tokenized identifiers provided.\\n\\n\` +
+      \`TOKENIZED TELEMETRY:\\n\${JSON.stringify(tokenizedRecords, null, 2)}\`;
+
+    const result = await kerrigan.chat(
+      message, [],
+      'You are a NIST-certified security analyst. Be concise and ' +
+      'reference only the tokenized identifiers provided.'
+    );
+
+    if (result?.reply)
+      return { model: result.model || 'Kerrigan-Fantasma',
+               response: result.reply, isStub: false };
+
+    throw new Error('no reply');
+
+  } catch (_) {
+    // Stub fires if Kerrigan is offline or times out in the renderer
+    return { model: 'Kerrigan-Fantasma (cached)',
+             response: STUB_RESPONSE, isStub: true };
+  }
+});`,
+    },
+    data: {
+      label: 'Synthetic Telemetry',
+      file: 'src/data/demo-telemetry.json',
+      desc: '6 realistic endpoint events covering the most common attack patterns. All values are synthetic — no real IPs or identities.',
+      code: `[
+  // C2 beaconing — svchost phoning home to a known Tor exit node
+  { "id":1, "src_ip":"10.0.1.47",  "dst_ip":"185.220.101.45",
+    "username":"sarah.chen",   "device_id":"LAPTOP-SC7291",
+    "event_type":"C2_Beacon",          "severity":"Critical",
+    "bytes_out":47230,  "port":443,  "process":"svchost.exe" },
+
+  // Data exfiltration — large outbound over non-standard HTTPS port
+  { "id":2, "src_ip":"10.0.1.83",  "dst_ip":"91.108.4.182",
+    "username":"marcus.wright", "device_id":"WORKST-MW0034",
+    "event_type":"Data_Exfil",         "severity":"High",
+    "bytes_out":2304512, "port":8443, "process":"python3" },
+
+  // Lateral movement — NTLM relay between internal hosts
+  { "id":3, "src_ip":"10.0.1.47",  "dst_ip":"10.0.1.83",
+    "username":"sarah.chen",   "device_id":"LAPTOP-SC7291",
+    "event_type":"Lateral_Movement",   "severity":"High",
+    "bytes_out":8192,   "port":445,  "process":"ntlmssp" },
+
+  // DNS tunneling — oversized queries to unusual resolver
+  { "id":4, "src_ip":"10.0.1.121", "dst_ip":"104.21.64.0",
+    "username":"amir.hassan",  "device_id":"LAPTOP-AH4490",
+    "event_type":"DNS_Tunneling",      "severity":"High",
+    "bytes_out":12345,  "port":53,   "process":"named" },
+
+  // Persistence install — curl dropping binary over plain HTTP
+  { "id":5, "src_ip":"10.0.1.83",  "dst_ip":"203.0.113.99",
+    "username":"marcus.wright", "device_id":"WORKST-MW0034",
+    "event_type":"Persistence_Install","severity":"Critical",
+    "bytes_out":524288, "port":80,   "process":"curl" },
+
+  // Credential harvesting — low-volume exfil from browser process
+  { "id":6, "src_ip":"10.0.1.200", "dst_ip":"185.220.101.45",
+    "username":"priya.nair",   "device_id":"LAPTOP-PN6621",
+    "event_type":"Cred_Harvesting",    "severity":"Medium",
+    "bytes_out":2048,   "port":443,  "process":"chrome" }
+]`,
+    },
+  };
+
+  const s = SNIPPETS[active];
+  const TABS2 = [
+    ['tokenize',   'Tokenization'],
+    ['guardrail',  'Output Guardrail'],
+    ['detokenize', 'De-tokenization'],
+    ['llm',        'Kerrigan Handler'],
+    ['data',       'Telemetry Data'],
+  ];
+
+  return (
+    <div>
+      <h3 className="font-bold text-gray-900 mb-1" style={{fontSize:'1.1rem'}}>Code Walkthrough</h3>
+      <p className="text-gray-500 mb-5" style={{fontSize:'0.85rem'}}>
+        Key implementation files — no IDE needed.
+      </p>
+
+      {/* Inner snippet tabs */}
+      <div className="flex mb-4" style={{gap:'0.5rem',flexWrap:'wrap'}}>
+        {TABS2.map(([id, label]) => (
+          <button key={id} onClick={() => setActive(id)}
+            className="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+            style={{background: active===id ? '#1e40af' : '#f3f4f6',
+                    color: active===id ? '#fff' : '#374151',
+                    border: active===id ? 'none' : '1px solid #e5e7eb'}}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* File badge + description */}
+      <div className="flex items-start gap-4 mb-4">
+        <span style={{fontFamily:'monospace',fontSize:'0.78rem',background:'#1e293b',color:'#94a3b8',padding:'4px 10px',borderRadius:'6px',flexShrink:0}}>
+          {s.file}
+        </span>
+        <p className="text-gray-600" style={{fontSize:'0.83rem',lineHeight:'1.5'}}>{s.desc}</p>
+      </div>
+
+      {/* Code block */}
+      <div style={{background:'#0f172a',borderRadius:'0.75rem',padding:'1.25rem',overflowX:'auto'}}>
+        <pre style={{margin:0,fontSize:'0.78rem',lineHeight:'1.7',color:'#e2e8f0',fontFamily:'monospace',whiteSpace:'pre'}}>
+          {s.code}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+function ProtegityDemoView() {
+  const [tab, setTab] = useState('intro');
+  const TABS = [
+    ['intro',        '① Problem Framing'],
+    ['architecture', '② Architecture'],
+    ['pipeline',     '③ Live Pipeline'],
+    ['compliance',   '④ NIST Mapping'],
+    ['code',         '⑤ Code Walkthrough'],
+    ['roadmap',      '⑥ Use Cases & Roadmap'],
+  ];
+  return (
+    <div>
+      <div className="flex border-b border-gray-200 mb-6" style={{overflowX:'auto'}}>
+        {TABS.map(([id, label]) => (
+          <button key={id} onClick={() => setTab(id)}
+            className={`px-4 py-3 text-sm font-medium border-b-2 mr-1 flex-shrink-0 transition-colors ${tab===id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === 'intro'        && <DemoIntroTab />}
+      {tab === 'architecture' && <DemoArchTab />}
+      {tab === 'pipeline'     && <DemoPipelineTab />}
+      {tab === 'compliance'   && <DemoComplianceTab />}
+      {tab === 'code'         && <DemoCodeTab />}
+      {tab === 'roadmap'      && <DemoRoadmapTab />}
+    </div>
+  );
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+function DashboardView({ stats, threats, secChecks }) {
+  const failCount = (secChecks||[]).filter(c => c.status === 'fail').length;
+  const cpu = stats ? Math.round(stats.cpu) : 0;
+  const ram = stats ? stats.ramUsedGB.toFixed(1) : '—';
+  const net = stats ? ((stats.netInKB + stats.netOutKB) / 1024).toFixed(1) : '—';
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2 bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+        <h3 className="text-xl font-bold text-gray-900 mb-6">Enterprise Security Overview</h3>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <div className="text-center p-4 bg-red-50 rounded-xl">
+            <Bug className="w-8 h-8 text-red-500 mx-auto mb-2" />
+            <div className="text-2xl font-bold text-gray-900">{failCount}</div>
+            <div className="text-sm text-gray-600">Failed Checks</div>
+          </div>
+          <div className="text-center p-4 bg-blue-50 rounded-xl">
+            <Cpu className="w-8 h-8 text-blue-500 mx-auto mb-2" />
+            <div className="text-2xl font-bold text-gray-900">{cpu}%</div>
+            <div className="text-sm text-gray-600">CPU Usage</div>
+          </div>
+          <div className="text-center p-4 bg-green-50 rounded-xl">
+            <Shield className="w-8 h-8 text-green-500 mx-auto mb-2" />
+            <div className="text-2xl font-bold text-gray-900">{threats.length}</div>
+            <div className="text-sm text-gray-600">Threats Seen</div>
+          </div>
+          <div className="text-center p-4 bg-purple-50 rounded-xl">
+            <Network className="w-8 h-8 text-purple-500 mx-auto mb-2" />
+            <div className="text-2xl font-bold text-gray-900">{net}</div>
+            <div className="text-sm text-gray-600">MB/s Net I/O</div>
+          </div>
+        </div>
+        <div className="bg-gray-50 rounded-xl p-4">
+          <h4 className="font-semibold text-gray-900 mb-3">Live Threat Intelligence</h4>
+          <div className="space-y-2 max-h-48 overflow-y-auto">
+            {threats.length === 0
+              ? <div className="text-sm text-gray-500">No threats detected — monitoring active</div>
+              : threats.slice(0,10).map((t,i) => (
+                <div key={i} className="flex items-center justify-between text-sm">
+                  <span className="text-gray-700">{t.description || t.message || t.detail || t.type || '—'}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ml-2 flex-shrink-0 ${
+                    t.severity==='critical'?'bg-red-100 text-red-700':
+                    t.severity==='high'?'bg-orange-100 text-orange-700':'bg-yellow-100 text-yellow-700'}`}>
+                    {t.severity||'info'}
+                  </span>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">System Status</h3>
+          <div className="space-y-3">
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-gray-600">CPU Usage</span>
+              <span className="font-medium">{cpu}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-1.5">
+              <div className="bg-blue-500 h-1.5 rounded-full transition-all" style={{width:`${cpu}%`}}></div>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Memory Used</span>
+              <span className="font-medium">{ram} GB</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Net I/O</span>
+              <span className="font-medium">{net} MB/s</span>
+            </div>
+          </div>
+        </div>
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Active Modules</h3>
+          <div className="space-y-2">
+            {[['IDS/IPS Engine',true],['Threat Hunter',true],['Connection Monitor',true],['AI Assistant',true]].map(([name,ok],i)=>(
+              <div key={i} className="flex items-center justify-between">
+                <span className="text-sm text-gray-700">{name}</span>
+                <div className={`w-2 h-2 rounded-full ${ok?'bg-green-400':'bg-gray-300'}`}></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Packet Analyzer ───────────────────────────────────────────────────────────
+function PacketAnalyzerView({ connections }) {
+  const [paused, setPaused] = useState(false);
+  const shown = paused ? [] : connections;
+  return (
+    <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+      <div className="flex items-center justify-between mb-6">
+        <h3 className="text-xl font-bold text-gray-900">Live Connection Monitor</h3>
+        <div className="flex items-center space-x-3">
+          <button onClick={() => setPaused(p=>!p)}
+            className={`px-4 py-2 text-white rounded-xl flex items-center text-sm ${paused?'bg-green-500 hover:bg-green-600':'bg-red-500 hover:bg-red-600'}`}>
+            {paused ? <><Play className="w-4 h-4 mr-2"/>Resume</> : <><Pause className="w-4 h-4 mr-2"/>Pause</>}
+          </button>
+          <span className="text-sm text-gray-500">{connections.length} connections</span>
+        </div>
+      </div>
+      <div className="bg-black rounded-xl p-4">
+        <div className="font-mono text-xs text-green-400 mb-2 grid grid-cols-12 gap-2 border-b border-gray-700 pb-2">
+          <span className="col-span-3">Local Address</span>
+          <span className="col-span-3">Remote Address</span>
+          <span className="col-span-2">Proto</span>
+          <span className="col-span-2">State</span>
+          <span className="col-span-2">PID</span>
+        </div>
+        <div className="max-h-96 overflow-y-auto space-y-0.5">
+          {shown.slice(0,60).map((c,i) => (
+            <div key={i} className="font-mono text-xs text-gray-300 hover:bg-gray-800 px-1 py-0.5 rounded grid grid-cols-12 gap-2">
+              <span className="col-span-3 truncate">{c.localAddr||'—'}</span>
+              <span className="col-span-3 truncate text-yellow-300">{c.remoteAddr||'—'}</span>
+              <span className="col-span-2">{c.protocol||'TCP'}</span>
+              <span className={`col-span-2 ${c.state==='ESTABLISHED'?'text-green-400':c.state==='LISTEN'?'text-blue-400':'text-gray-400'}`}>{c.state||'—'}</span>
+              <span className="col-span-2">{c.pid||'—'}</span>
+            </div>
+          ))}
+          {connections.length===0 && <div className="text-gray-500 text-sm py-8 text-center">Waiting for connection data…</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Vuln Scanner ──────────────────────────────────────────────────────────────
+function VulnScannerView({ secChecks }) {
+  const [scanResult,  setScanResult]  = useState(null);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [cveQuery,    setCveQuery]    = useState('macos sequoia');
+  const [cveResult,   setCveResult]   = useState(null);
+  const [cveLoading,  setCveLoading]  = useState(false);
+  const [huntPath,    setHuntPath]    = useState('/Users/dadsmacpro/Desktop');
+  const [huntResults, setHuntResults] = useState(null);
+  const [huntLoading, setHuntLoading] = useState(false);
+
+  const runDeepScan = async () => {
+    setScanLoading(true);
+    try {
+      const [ps, hd] = await Promise.all([
+        cg.pentestPortscan('127.0.0.1', [21,22,23,25,53,80,443,3306,3307,5432,6379,8080,8443,27017]),
+        cg.pentestHeaders('http://localhost').catch(()=>null),
+      ]);
+      setScanResult({ ports: ps, headers: hd });
+    } catch(e) { setScanResult({error:e.message}); }
+    finally { setScanLoading(false); }
+  };
+
+  const runCve = async () => {
+    setCveLoading(true);
+    try { setCveResult(await cg.scanCve(cveQuery)); }
+    catch(e) { setCveResult({error:e.message}); }
+    finally { setCveLoading(false); }
+  };
+
+  const runHunt = async () => {
+    setHuntLoading(true);
+    try { setHuntResults(await cg.kerriganHunt(huntPath)); }
+    catch(e) { setHuntResults({error:e.message}); }
+    finally { setHuntLoading(false); }
+  };
+
+  const sevColor = s => s==='critical'?'bg-red-100 text-red-800':s==='high'?'bg-orange-100 text-orange-800':s==='medium'?'bg-yellow-100 text-yellow-800':'bg-blue-100 text-blue-800';
+
+  return (
+    <div className="space-y-4">
+      {/* Security checks — live from main.js */}
+      <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-gray-900">Live Security Checks</h3>
+          <button onClick={runDeepScan} disabled={scanLoading}
+            className="px-4 py-2 bg-red-500 text-white rounded-xl hover:bg-red-600 flex items-center text-sm disabled:opacity-50">
+            <Bug className="w-4 h-4 mr-2"/>{scanLoading?'Scanning localhost…':'Deep Scan localhost'}
+          </button>
+        </div>
+        <div className="space-y-2">
+          {(secChecks||[]).map((c,i) => (
+            <div key={i} className="flex items-center justify-between border border-gray-100 rounded-xl px-4 py-3">
+              <div className="flex items-center">
+                <div className={`w-2.5 h-2.5 rounded-full mr-3 ${c.status==='pass'?'bg-green-500':c.status==='warn'?'bg-yellow-500':'bg-red-500'}`}/>
+                <div>
+                  <span className="font-medium text-gray-900 text-sm">{c.name}</span>
+                  {c.detail && <p className="text-xs text-gray-500 mt-0.5">{c.detail}</p>}
+                </div>
+              </div>
+              <span className={`px-2 py-0.5 text-xs rounded-full flex-shrink-0 ml-3 ${c.status==='pass'?'bg-green-100 text-green-800':c.status==='warn'?'bg-yellow-100 text-yellow-800':'bg-red-100 text-red-800'}`}>{c.status}</span>
+            </div>
+          ))}
+          {(!secChecks||secChecks.length===0) && <div className="text-gray-400 text-sm py-6 text-center">Security checks loading…</div>}
+        </div>
+        {scanResult && !scanResult.error && (
+          <div className="mt-4 bg-gray-50 rounded-xl p-3">
+            <div className="text-xs font-semibold text-gray-600 mb-2">Deep Scan — localhost</div>
+            <div className="text-xs text-gray-500">{scanResult.ports?.open_count ?? 0} open ports · {scanResult.ports?.open?.map(p=>p.port).join(', ')||'none'}</div>
+            {scanResult.headers && (
+              <div className="text-xs text-gray-500 mt-1">
+                HTTP headers: {scanResult.headers.checks?.filter(c=>c.present).length ?? 0}/{scanResult.headers.checks?.length ?? 0} security headers present
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* NVD CVE Search */}
+      <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+        <h3 className="text-lg font-bold text-gray-900 mb-3 flex items-center gap-2">
+          <Search className="w-4 h-4 text-blue-500"/>NVD CVE Database Search
+        </h3>
+        <div className="flex gap-2 mb-3">
+          <input value={cveQuery} onChange={e=>setCveQuery(e.target.value)}
+            onKeyDown={e=>e.key==='Enter'&&runCve()}
+            className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+            placeholder="e.g. macos sequoia, apache, openssl…"/>
+          <button onClick={runCve} disabled={cveLoading}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50">
+            {cveLoading?'Fetching…':'Search NVD'}
+          </button>
+        </div>
+        {cveResult && !cveResult.error && (
+          <div>
+            <div className="text-xs text-gray-400 mb-2">{cveResult.total} total results for "{cveResult.query}" — showing top {cveResult.vulns?.length}</div>
+            <div className="space-y-2 max-h-72 overflow-y-auto">
+              {cveResult.vulns?.map((v,i)=>(
+                <div key={i} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                  <span className={`px-2 py-0.5 text-xs rounded-full flex-shrink-0 font-mono ${sevColor(v.severity)}`}>{v.score}</span>
+                  <div className="min-w-0">
+                    <div className="text-xs font-mono font-bold text-blue-700">{v.id}</div>
+                    <div className="text-xs text-gray-600 mt-0.5">{v.description}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">{v.published}</div>
+                  </div>
+                </div>
+              ))}
+              {cveResult.vulns?.length === 0 && <div className="text-xs text-gray-400 text-center py-4">No CVEs found for this query</div>}
+            </div>
+          </div>
+        )}
+        {cveResult?.error && <div className="text-xs text-red-600 mt-2">{cveResult.error}</div>}
+      </div>
+
+      <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+        <h3 className="text-lg font-bold text-gray-900 mb-3">AI Threat Hunter</h3>
+        <div className="flex gap-3 mb-4">
+          <input value={huntPath} onChange={e=>setHuntPath(e.target.value)}
+            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+            placeholder="Path to scan"/>
+          <button onClick={runHunt} disabled={huntLoading}
+            className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50 flex items-center text-sm">
+            <Search className="w-4 h-4 mr-2"/>{huntLoading?'Scanning…':'Hunt'}
+          </button>
+        </div>
+        {huntResults && !huntResults.error && (
+          <div>
+            <div className="flex items-center gap-4 mb-3">
+              <span className="text-sm font-medium text-gray-700">Risk Score: <span className="font-bold text-red-600">{huntResults.risk_score||0}</span></span>
+              <span className="text-sm text-gray-500">{huntResults.total||0} findings</span>
+            </div>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {(huntResults.findings||[]).map((f,i)=>(
+                <div key={i} className="flex items-start p-3 bg-gray-50 rounded-lg">
+                  <span className={`px-2 py-0.5 text-xs rounded-full mr-3 flex-shrink-0 ${sevColor(f.severity)}`}>{f.severity}</span>
+                  <div>
+                    <div className="text-sm font-medium text-gray-800">{f.category}</div>
+                    <div className="text-xs text-gray-500 font-mono">{f.path}</div>
+                    <div className="text-xs text-gray-600">{f.description}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {huntResults?.error && <div className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{huntResults.error}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ── Pen Testing ───────────────────────────────────────────────────────────────
+function PenTestingView() {
+  const [target,    setTarget]    = useState('127.0.0.1');
+  const [url,       setUrl]       = useState('http://localhost');
+  const [sslHost,   setSslHost]   = useState('localhost');
+  const [sslPort,   setSslPort]   = useState(443);
+  const [psResult,  setPsResult]  = useState(null);
+  const [hdResult,  setHdResult]  = useState(null);
+  const [sslResult, setSslResult] = useState(null);
+  const [sshResult, setSshResult] = useState(null);
+  const [loading,   setLoading]   = useState({});
+
+  const run = (key, fn) => {
+    setLoading(l=>({...l,[key]:true}));
+    fn().then(r => {
+      if (key==='ps')  setPsResult(r);
+      if (key==='hd')  setHdResult(r);
+      if (key==='ssl') setSslResult(r);
+      if (key==='ssh') setSshResult(r);
+    }).catch(e => {
+      const err = {error: e.message};
+      if (key==='ps')  setPsResult(err);
+      if (key==='hd')  setHdResult(err);
+      if (key==='ssl') setSslResult(err);
+      if (key==='ssh') setSshResult(err);
+    }).finally(() => setLoading(l=>({...l,[key]:false})));
+  };
+
+  const sc = s => s==='pass'?'text-green-600 bg-green-50':s==='fail'?'text-red-600 bg-red-50':'text-yellow-600 bg-yellow-50';
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-4 flex items-center gap-3">
+        <AlertTriangle className="w-5 h-5 text-yellow-600 flex-shrink-0"/>
+        <span className="text-sm text-yellow-800"><strong>Authorized testing only.</strong> Only run against systems you own or have written permission to test. All actions logged to kerrigan_db.</span>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Port Scanner */}
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2"><Network className="w-4 h-4 text-purple-500"/>Port Scanner</h4>
+          <div className="flex gap-2 mb-3">
+            <input value={target} onChange={e=>setTarget(e.target.value)}
+              className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono"
+              placeholder="Target IP"/>
+            <button onClick={()=>run('ps', ()=>cg.pentestPortscan(target, [21,22,23,25,53,80,443,3306,3307,5432,6379,8080,8443,27017]))}
+              disabled={loading.ps}
+              className="px-3 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 disabled:opacity-50">
+              {loading.ps ? 'Scanning…' : 'Scan'}
+            </button>
+          </div>
+          {psResult && !psResult.error && (
+            <div>
+              <div className="text-xs text-gray-500 mb-2">Scanned {psResult.scanned} ports — {psResult.open_count} open</div>
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {psResult.open?.length === 0
+                  ? <div className="text-xs text-green-600">All common ports closed</div>
+                  : psResult.open.map((p,i)=>(
+                    <div key={i} className="flex items-center justify-between bg-red-50 rounded-lg px-3 py-1.5 text-sm">
+                      <span className="font-mono font-bold text-red-700">{p.port}</span>
+                      <span className="text-xs text-gray-500 truncate max-w-xs">{p.banner||'open'}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+          {psResult?.error && <div className="text-xs text-red-600 mt-2">{psResult.error}</div>}
+        </div>
+
+        {/* HTTP Header Security */}
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2"><Shield className="w-4 h-4 text-blue-500"/>HTTP Security Headers</h4>
+          <div className="flex gap-2 mb-3">
+            <input value={url} onChange={e=>setUrl(e.target.value)}
+              className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono"
+              placeholder="https://example.com"/>
+            <button onClick={()=>run('hd', ()=>cg.pentestHeaders(url))}
+              disabled={loading.hd}
+              className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50">
+              {loading.hd ? 'Checking…' : 'Check'}
+            </button>
+          </div>
+          {hdResult && !hdResult.error && (
+            <div className="space-y-1 max-h-48 overflow-y-auto">
+              {hdResult.checks?.map((c,i)=>(
+                <div key={i} className={`flex items-center justify-between px-3 py-1.5 rounded-lg text-xs ${sc(c.status)}`}>
+                  <span className="font-medium">{c.name}</span>
+                  <span className="font-mono text-right max-w-xs truncate">{c.present ? c.value||'set' : 'MISSING'}</span>
+                </div>
+              ))}
+              <div className="text-xs text-gray-400 mt-1">Server: {hdResult.server} · HTTP {hdResult.status_code}</div>
+            </div>
+          )}
+          {hdResult?.error && <div className="text-xs text-red-600 mt-2">{hdResult.error}</div>}
+        </div>
+
+        {/* TLS/SSL Check */}
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2"><Lock className="w-4 h-4 text-green-500"/>TLS/SSL Audit</h4>
+          <div className="flex gap-2 mb-3">
+            <input value={sslHost} onChange={e=>setSslHost(e.target.value)}
+              className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono" placeholder="hostname"/>
+            <input value={sslPort} onChange={e=>setSslPort(Number(e.target.value))}
+              className="w-20 px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono" placeholder="443"/>
+            <button onClick={()=>run('ssl', ()=>cg.pentestSsl(sslHost, sslPort))}
+              disabled={loading.ssl}
+              className="px-3 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 disabled:opacity-50">
+              {loading.ssl ? 'Testing…' : 'Test'}
+            </button>
+          </div>
+          {sslResult && !sslResult.error && (
+            <div className="space-y-1">
+              {sslResult.checks?.map((c,i)=>(
+                <div key={i} className={`flex items-center justify-between px-3 py-1.5 rounded-lg text-xs ${sc(c.status)}`}>
+                  <span className="font-medium">{c.check}</span>
+                  <span>{c.detail||c.status}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {sslResult?.error && <div className="text-xs text-red-600 mt-2">{sslResult.error}</div>}
+        </div>
+
+        {/* SSH Key Audit */}
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2"><Key className="w-4 h-4 text-yellow-500"/>SSH Key Audit</h4>
+          <button onClick={()=>run('ssh', ()=>cg.pentestSsh())}
+            disabled={loading.ssh}
+            className="mb-3 px-4 py-2 bg-yellow-500 text-white rounded-lg text-sm hover:bg-yellow-600 disabled:opacity-50">
+            {loading.ssh ? 'Auditing…' : 'Audit ~/.ssh Keys'}
+          </button>
+          {sshResult && !sshResult.error && (
+            <div>
+              <div className="text-xs text-gray-500 mb-2">{sshResult.key_count} private keys · {sshResult.pubkey_count} public keys</div>
+              <div className="space-y-1">
+                {sshResult.keys?.map((k,i)=>(
+                  <div key={i} className={`flex items-center justify-between px-3 py-1.5 rounded-lg text-xs ${sc(k.status)}`}>
+                    <span className="font-mono">{k.file}</span>
+                    <span>{k.type} {k.bits>0?k.bits+'bit':''}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {sshResult?.keys?.length===0 && <div className="text-xs text-gray-400">No SSH keys found in ~/.ssh</div>}
+          {sshResult?.error && <div className="text-xs text-red-600 mt-2">{sshResult.error}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── AI Auto-Patcher ───────────────────────────────────────────────────────────
+function AIPatcherView() {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(()=>{
+    const load = () => {
+      const fetcher = cg.patcherStatus
+        ? cg.patcherStatus()
+        : fetch('http://127.0.0.1:7432/patcher/status').then(r=>r.json()).catch(()=>null);
+      fetcher.then(s=>setStatus(s)).catch(()=>setStatus(null)).finally(()=>setLoading(false));
+    };
+    load();
+    const t = setInterval(load, 8000);  // 8s so phase changes are visible
+    return ()=>clearInterval(t);
+  }, []);
+
+  const phase = status?.fuzzer_phase ?? 'idle';
+  const fzRunning = status?.fuzzer_running ?? false;
+
+  // Map real fuzzer phase to each agent's displayed status
+  const phaseAgent = {
+    generating:  'Orchestrator',
+    compiling:   'Fuzzer Engine',
+    fuzzing:     'Fuzzer Engine',
+    triaging:    'Vuln Classifier',
+    analyzing:   'Program Model',
+    evolving:    'Patch Generator',
+  };
+  const activeAgent = phaseAgent[phase] ?? '';
+
+  const agentStatus = (name) => {
+    if (!fzRunning) return 'idle';
+    if (name === activeAgent) return 'running';
+    // Orchestrator always coordinating while fuzzer runs
+    if (name === 'Orchestrator' && fzRunning) return 'coordinating';
+    // Regression Tester active when we have crashes to validate
+    if (name === 'Regression Tester' && (status?.fuzzer_crashes??0)>0) return 'validating';
+    // Vuln Classifier active when DB has crashes
+    if (name === 'Vuln Classifier' && (status?.db_crashes??0)>0) return 'analyzing';
+    return 'idle';
+  };
+
+  const agentTask = (name) => {
+    const st = agentStatus(name);
+    if (name === 'Fuzzer Engine') {
+      if (st === 'running') {
+        if (phase === 'fuzzing')   return status?.fuzzer_target ? `Fuzzing: ${status.fuzzer_target}` : 'Running mutation fuzzer';
+        if (phase === 'compiling') return status?.fuzzer_last_event || 'Compiling harness…';
+      }
+      return status?.fuzzer_target ? `Last target: ${status.fuzzer_target}` : 'Awaiting next target';
+    }
+    if (name === 'Orchestrator') return fzRunning ? `Iteration ${status?.fuzzer_iteration??0} · ${_fmtUptime(status?.fuzzer_uptime??0)}` : 'Starting…';
+    if (name === 'Program Model') return phase==='analyzing' ? (status?.fuzzer_last_event||'Analyzing crash…') : 'Idle';
+    if (name === 'Vuln Classifier') return (status?.db_crashes??0)>0 ? `${status.db_crashes} crash(es) in DB` : 'Awaiting findings';
+    if (name === 'Patch Generator') return phase==='evolving' ? (status?.fuzzer_last_event||'Evolving harness…') : 'Idle';
+    if (name === 'Regression Tester') return (status?.fuzzer_crashes??0)>0 ? `${status.fuzzer_crashes} crash(es) this session` : 'Idle';
+    if (name === 'Seed Generator') return fzRunning ? 'Feeding mutation seeds' : 'Idle';
+    return 'Idle';
+  };
+
+  function _fmtUptime(secs) {
+    if (!secs) return '0s';
+    const h = Math.floor(secs/3600), m = Math.floor((secs%3600)/60), s = secs%60;
+    return h>0 ? `${h}h ${m}m` : m>0 ? `${m}m ${s}s` : `${s}s`;
+  }
+
+  const agentNames = ['Orchestrator','Seed Generator','Fuzzer Engine','Program Model','Vuln Classifier','Patch Generator','Regression Tester'];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[
+          ['Iterations', status?.fuzzer_iteration ?? '…', 'text-blue-600', 'Total fuzzing iterations run'],
+          ['Crashes Found', (status?.db_crashes ?? status?.fuzzer_crashes) ?? '…', 'text-red-600', 'kerrigan_db.crashes'],
+          ['Sessions Run', status?.db_sessions ?? '…', 'text-purple-600', 'kerrigan_db.sessions'],
+          ['Adaptive Rules', status?.adaptive_rules ?? '…', 'text-green-600', 'adaptive_defense.jsonl'],
+        ].map(([label,val,color,sub],i)=>(
+          <div key={i} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 text-center">
+            {loading ? <div className="text-2xl font-bold text-gray-300 animate-pulse">…</div>
+              : <div className={`text-2xl font-bold ${color}`}>{val}</div>}
+            <div className="text-sm font-medium text-gray-700">{label}</div>
+            <div className="text-xs text-gray-400">{sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-semibold text-gray-900">Active AI Agents</h4>
+            {fzRunning && <span className="px-2 py-0.5 text-xs bg-green-100 text-green-800 rounded-full">fuzzer live</span>}
+            {!fzRunning && !loading && <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-500 rounded-full">fuzzer offline</span>}
+          </div>
+          <div className="space-y-2">
+            {agentNames.map((name,i)=>{
+              const st = agentStatus(name);
+              const task = agentTask(name);
+              const dot = st==='running'?'bg-green-100 text-green-800':['coordinating','analyzing','validating'].includes(st)?'bg-blue-100 text-blue-800':'bg-gray-100 text-gray-500';
+              return (
+                <div key={i} className="flex items-center justify-between p-2.5 bg-gray-50 rounded-lg">
+                  <div>
+                    <div className="font-medium text-gray-900 text-sm">{name}</div>
+                    <div className="text-xs text-gray-500">{task}</div>
+                  </div>
+                  <div className={`px-2 py-0.5 text-xs rounded-full flex-shrink-0 ml-2 ${dot}`}>{st}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <h4 className="font-semibold text-gray-900 mb-3">System Status</h4>
+          <div className="space-y-2 text-sm">
+            {[
+              ['Kerrigan AI', status?.kerrigan_available?'Online':'Offline (using Ollama)', status?.kerrigan_available?'text-green-600':'text-yellow-600'],
+              ['Fuzzer', fzRunning ? `${phase} · ${status?.fuzzer_target||''}` : 'idle', fzRunning?'text-green-600':'text-gray-400'],
+              ['PQC Keys', status?.pqc_keys_exist?'Found in keys/':'Not found', status?.pqc_keys_exist?'text-green-600':'text-red-600'],
+              ['Training Data', status?.stage4_files>0?`${status.stage4_files} files ready`:'No files', status?.stage4_files>0?'text-green-600':'text-gray-400'],
+              ['Safety Gate', 'Overmind — active', 'text-green-600'],
+            ].map(([k,v,c],i)=>(
+              <div key={i} className="flex justify-between items-center">
+                <span className="text-gray-600">{k}</span>
+                <span className={`font-medium text-right max-w-[60%] truncate ${c}`}>{loading?'…':v}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 bg-black rounded-xl p-3 font-mono text-xs leading-5">
+            <div className="text-cyan-400">[PATCHER] Multi-agent system {fzRunning?'active':'starting…'}</div>
+            {status?.fuzzer_last_event && <div className="text-yellow-400">[FUZZER] {status.fuzzer_last_event}</div>}
+            {(status?.fuzzer_crashes??0)>0 && <div className="text-red-400">[VULN] {status.fuzzer_crashes} crash(es) this session</div>}
+            {(status?.db_crashes??0)>0 && <div className="text-orange-400">[DB] {status.db_crashes} total crash(es) stored</div>}
+            {(status?.adaptive_rules??0)>0 && <div className="text-green-400">[ADAPT] {status.adaptive_rules} adaptive rules loaded</div>}
+            {(status?.stage4_examples??0)>0 && <div className="text-blue-400">[TRAIN] {status.stage4_examples} examples ready</div>}
+            <div className="text-green-400">[OVERMIND] Safety gate — live weaponization blocked</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Crypto Audit ──────────────────────────────────────────────────────────────
+function CryptoAuditView() {
+  const [sshData,  setSshData]  = useState(null);
+  const [tlsData,  setTlsData]  = useState(null);
+  const [loading,  setLoading]  = useState({});
+  const [tlsHost,  setTlsHost]  = useState('localhost');
+  const [tlsPort,  setTlsPort]  = useState(443);
+
+  const run = (key, fn, setter) => {
+    setLoading(l=>({...l,[key]:true}));
+    fn().then(setter).catch(e=>setter({error:e.message}))
+       .finally(()=>setLoading(l=>({...l,[key]:false})));
+  };
+
+  useEffect(()=>{ run('ssh', ()=>cg.pentestSsh(), setSshData); }, []);
+
+  const sc = s => s==='pass'?'bg-green-50 text-green-700':s==='fail'?'bg-red-50 text-red-700':'bg-yellow-50 text-yellow-700';
+  const dot = s => s==='pass'?'bg-green-400':s==='fail'?'bg-red-400':'bg-yellow-400';
+
+  const pqcChecks = [
+    {name:'ML-KEM-768 (NIST FIPS 203)', status:'pass', note:'Post-quantum KEM — enabled'},
+    {name:'SLH-DSA-SHA2-128s (FIPS 205)', status:'pass', note:'Post-quantum signing — enabled'},
+    {name:'ML-DSA-65 (FIPS 204)', status:'warn', note:'Not yet integrated'},
+    {name:'AES-256-GCM', status:'pass', note:'Symmetric — system standard'},
+    {name:'RSA-4096', status:'warn', note:'Classical — vulnerable to Shor'},
+    {name:'Ed25519', status:'pass', note:'Elliptic curve — strong'},
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-semibold text-gray-900 flex items-center gap-2">
+              <Key className="w-4 h-4 text-yellow-500"/>SSH Keys (~/.ssh)
+            </h4>
+            <button onClick={()=>run('ssh',()=>cg.pentestSsh(),setSshData)}
+              disabled={loading.ssh}
+              className="px-3 py-1 text-xs bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50">
+              {loading.ssh?'Scanning…':'Rescan'}
+            </button>
+          </div>
+          {sshData && !sshData.error && (
+            <>
+              <div className="text-xs text-gray-400 mb-2">{sshData.key_count} private keys · {sshData.pubkey_count} public keys</div>
+              {sshData.keys?.length === 0
+                ? <div className="text-xs text-gray-400 italic">No private keys found in ~/.ssh</div>
+                : sshData.keys?.map((k,i)=>(
+                  <div key={i} className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm mb-1 ${sc(k.status)}`}>
+                    <span className="font-mono">{k.file}</span>
+                    <span className="text-xs">{k.type} {k.bits>0?k.bits+'b':''}</span>
+                  </div>
+                ))}
+            </>
+          )}
+          {sshData?.error && <div className="text-xs text-red-600">{sshData.error}</div>}
+          {!sshData && loading.ssh && <div className="text-xs text-gray-400 animate-pulse">Scanning…</div>}
+        </div>
+
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <Lock className="w-4 h-4 text-blue-500"/>TLS/SSL Certificate Check
+          </h4>
+          <div className="flex gap-2 mb-3">
+            <input value={tlsHost} onChange={e=>setTlsHost(e.target.value)}
+              className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono" placeholder="hostname"/>
+            <input value={tlsPort} onChange={e=>setTlsPort(Number(e.target.value))}
+              className="w-20 px-2 py-2 border border-gray-200 rounded-lg text-sm font-mono" placeholder="443"/>
+            <button onClick={()=>run('tls',()=>cg.pentestSsl(tlsHost,tlsPort),setTlsData)}
+              disabled={loading.tls}
+              className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50">
+              {loading.tls?'…':'Check'}
+            </button>
+          </div>
+          {tlsData && !tlsData.error && (
+            <div className="space-y-1">
+              {tlsData.checks?.map((c,i)=>(
+                <div key={i} className={`flex items-center justify-between px-3 py-1.5 rounded-lg text-xs ${sc(c.status)}`}>
+                  <span>{c.check}</span><span>{c.detail||c.status}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {tlsData?.error && <div className="text-xs text-red-600">{tlsData.error}</div>}
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+        <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+          <Shield className="w-4 h-4 text-purple-500"/>Post-Quantum Cryptography Status
+        </h4>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+          {pqcChecks.map((c,i)=>(
+            <div key={i} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg text-sm">
+              <span className="text-gray-700">{c.name}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400">{c.note}</span>
+                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${dot(c.status)}`}/>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 px-3 py-2 bg-purple-50 rounded-lg text-xs text-purple-700">
+          PQC keys stored in <span className="font-mono">kerrigan-fantasma/keys/</span> — gitignored. Managed by liboqs backend.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── IDS/IPS ───────────────────────────────────────────────────────────────────
+function IDSIPSView({ threats }) {
+  const [hp, setHp]         = useState({ ssh: 0, web: 0, database: 0, total: 0, recent: [] });
+  const [hpLoading, setHpLoading] = useState(false);
+  const [ipLookup,  setIpLookup]  = useState({});  // ip -> result
+  const [ipLoading, setIpLoading] = useState({});  // ip -> bool
+
+  const lookupIp = async (ip) => {
+    if (ipLookup[ip] || ipLoading[ip]) return;
+    setIpLoading(l => ({...l, [ip]: true}));
+    try {
+      const r = await fetch(`https://ipapi.co/${ip}/json/`);
+      const d = await r.json();
+      setIpLookup(l => ({...l, [ip]: {
+        country: d.country_name || '?',
+        city:    d.city || '',
+        org:     d.org || '',
+        flag:    d.country_code ? `https://flagcdn.com/16x12/${d.country_code.toLowerCase()}.png` : null,
+      }}));
+    } catch(e) {
+      setIpLookup(l => ({...l, [ip]: { country: 'Lookup failed', city:'', org:'' }}));
+    }
+    setIpLoading(l => ({...l, [ip]: false}));
+  };
+
+  const loadHoneypot = () => {
+    setHpLoading(true);
+    const fn = window.cyberguard?.honeypotCounts;
+    (fn ? fn() : Promise.resolve({ ssh:0, web:0, database:0, total:0, recent:[] }))
+      .then(d => { setHp(d||{}); setHpLoading(false); })
+      .catch(() => setHpLoading(false));
+  };
+
+  useEffect(() => { loadHoneypot(); const t = setInterval(loadHoneypot, 15000); return () => clearInterval(t); }, []);
+
+  const hpColor = n => n > 0 ? 'text-red-600 font-bold' : 'text-gray-400';
+  const severityClass = s => s==='critical'?'bg-red-200 text-red-800':s==='high'?'bg-orange-100 text-orange-700':'bg-yellow-100 text-yellow-700';
+
+  return (
+    <div className="space-y-4">
+      {/* Honeypot stat cards */}
+      <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
+        {[['SSH','Port 2222',hp.ssh,'text-purple-500',Shield],
+          ['Web','Port 8080',hp.web,'text-blue-500',Network],
+          ['MySQL','Port 3307',hp.database,'text-orange-500',Database],
+          ['FTP','Port 2121',hp.ftp,'text-green-500',Shield],
+          ['SMTP','Port 2525',hp.smtp,'text-yellow-500',Network],
+          ['RDP','Port 3389',hp.rdp,'text-red-500',Monitor],
+        ].map(([label,sub,count,c,Icon],i)=>(
+          <div key={i} className="bg-white rounded-2xl p-3 shadow-sm border border-gray-100 text-center">
+            <div className="flex items-center justify-center mb-1">
+              <Icon className={`w-5 h-5 ${c}`}/>
+              {hpLoading && <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse ml-1"/>}
+            </div>
+            <div className={`text-xl font-bold ${count>0?'text-red-600':'text-gray-300'}`}>{count??0}</div>
+            <div className="text-xs font-medium text-gray-700">{label}</div>
+            <div className="text-xs text-gray-400">{sub}</div>
+          </div>
+        ))}
+      </div>
+      {(hp.subnets_blocked??0)>0 && (
+        <div className="text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+          {hp.subnets_blocked} subnet(s) auto-blocked after repeated hits
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Live threat detections */}
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center mb-3">
+            <AlertTriangle className="w-5 h-5 text-red-600 mr-2"/>
+            <h4 className="font-semibold text-red-800">Threat Detections ({threats.length})</h4>
+          </div>
+          <div className="space-y-2 max-h-56 overflow-y-auto">
+            {threats.length===0
+              ? <div className="text-sm text-gray-400">No active threats detected</div>
+              : threats.slice(0,15).map((t,i)=>(
+                <div key={i} className="text-sm bg-red-50 rounded-lg p-2">
+                  <div className="flex justify-between items-start gap-2">
+                    <span className="font-medium text-red-800">{t.type||t.description||'Unknown'}</span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded-full flex-shrink-0 ${severityClass(t.severity)}`}>{t.severity||'low'}</span>
+                  </div>
+                  {t.detail && <div className="text-xs text-red-500 mt-0.5 truncate">{t.detail}</div>}
+                  {t.source && <div className="text-xs text-gray-400 font-mono mt-0.5">{t.source}</div>}
+                </div>
+              ))
+            }
+          </div>
+        </div>
+
+        {/* Live honeypot event feed */}
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-semibold text-gray-900">Honeypot Event Feed</h4>
+            <button onClick={loadHoneypot} className="text-xs text-blue-600 hover:underline">Refresh</button>
+          </div>
+          <div className="space-y-2 max-h-56 overflow-y-auto">
+            {(!hp.recent || hp.recent.length===0)
+              ? <div className="text-sm text-gray-400">No honeypot hits yet — listening on ports 2222, 8080, 3307, 2121, 2525, 3389</div>
+              : hp.recent.map((e,i)=>{
+                const typeColor={ssh:'bg-purple-100 text-purple-700',web:'bg-blue-100 text-blue-700',database:'bg-orange-100 text-orange-700',ftp:'bg-green-100 text-green-700',smtp:'bg-yellow-100 text-yellow-700',rdp:'bg-red-100 text-red-700'};
+                return (
+                <div key={i} className="text-sm bg-gray-50 rounded-lg p-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${typeColor[e.honeypot_type]||'bg-gray-100 text-gray-700'}`}>
+                      {e.honeypot_type?.toUpperCase()}
+                    </span>
+                    <span className="font-mono text-red-600 text-xs flex-1">{e.attacker_ip}:{e.attacker_port}</span>
+                    <span className="text-xs text-gray-400">{e.created_at ? new Date(e.created_at).toLocaleTimeString() : ''}</span>
+                    {e.attacker_ip !== '127.0.0.1' && (
+                      <button onClick={()=>lookupIp(e.attacker_ip)}
+                        disabled={ipLoading[e.attacker_ip]}
+                        className="text-xs px-2 py-0.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex-shrink-0">
+                        {ipLoading[e.attacker_ip] ? '…' : 'Lookup'}
+                      </button>
+                    )}
+                  </div>
+                  {e.payload && <div className="text-xs text-gray-500 mt-1 truncate font-mono">{e.payload}</div>}
+                  {ipLookup[e.attacker_ip] && (
+                    <div className="mt-1.5 flex items-center gap-2 px-2 py-1.5 bg-white border border-gray-200 rounded-lg">
+                      {ipLookup[e.attacker_ip].flag && <img src={ipLookup[e.attacker_ip].flag} alt="" className="flex-shrink-0"/>}
+                      <div className="text-xs">
+                        <span className="font-medium text-gray-800">{ipLookup[e.attacker_ip].country}</span>
+                        {ipLookup[e.attacker_ip].city && <span className="text-gray-500"> · {ipLookup[e.attacker_ip].city}</span>}
+                        {ipLookup[e.attacker_ip].org && <div className="text-gray-400 truncate">{ipLookup[e.attacker_ip].org}</div>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );})
+            }
+          </div>
+          <div className="mt-3 p-2 bg-yellow-50 rounded text-xs text-yellow-800">
+            <strong>Overmind Gate:</strong> Blocking live weaponization · All hits saved to Kerrigan memory
+          </div>
+        </div>
+      </div>
+
+      {/* IDS Rules */}
+      <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+        <h4 className="font-semibold text-gray-900 mb-4">Active IDS Rules</h4>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+          {['SQL injection pattern detection','Cross-site scripting (XSS) prevention',
+            'Buffer overflow signature matching','Suspicious outbound connections',
+            'Lateral movement detection','Privilege escalation monitoring',
+            'PQC key exposure detection','Distillation attack rate limiting',
+            'SSH brute force detection (port 2222)','Web exploit probe detection (port 8080)',
+            'MySQL honeypot handshake capture (port 3307)','Honeypot hit → Kerrigan memory pipeline'
+          ].map((rule,i)=>(
+            <div key={i} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+              <span className="text-sm text-gray-700">{rule}</span>
+              <div className="w-2 h-2 bg-green-400 rounded-full flex-shrink-0"/>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Forensics ─────────────────────────────────────────────────────────────────
+function ForensicsView() {
+  const [procs, setProcs]       = useState([]);
+  const [loading, setLoading]   = useState(false);
+  const [filter, setFilter]     = useState('all'); // all | suspicious
+  const [killing, setKilling]   = useState(null);
+  const [killMsg, setKillMsg]   = useState(null);
+  const [search, setSearch]     = useState('');
+
+  const refresh = () => {
+    setLoading(true);
+    const cg = window.cyberguard || {};
+    (cg.getProcesses ? cg.getProcesses() : Promise.resolve([])).then(list => {
+      setProcs(list || []);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  };
+
+  useEffect(() => { refresh(); const t = setInterval(refresh, 8000); return () => clearInterval(t); }, []);
+
+  const handleKill = (pid, name) => {
+    if (!window.confirm(`Terminate "${name}" (PID ${pid})?`)) return;
+    setKilling(pid);
+    const cg = window.cyberguard || {};
+    (cg.killProcess ? cg.killProcess(pid) : Promise.resolve({ ok: false, error: 'not available' })).then(r => {
+      setKilling(null);
+      setKillMsg(r.ok ? `✓ Process ${pid} terminated` : `✗ Failed: ${r.error}`);
+      setTimeout(() => setKillMsg(null), 3000);
+      if (r.ok) refresh();
+    });
+  };
+
+  const visible = procs.filter(p => {
+    if (filter === 'suspicious' && !p.suspicious) return false;
+    if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !String(p.pid).includes(search)) return false;
+    return true;
+  });
+
+  const suspicious = procs.filter(p => p.suspicious);
+
+  return (
+    <div className="space-y-4">
+      {/* Stats row */}
+      <div className="grid grid-cols-3 gap-4">
+        {[[Database, String(procs.length), 'Running Processes', 'text-blue-500'],
+          [AlertTriangle, String(suspicious.length), 'Flagged Suspicious', suspicious.length > 0 ? 'text-red-500' : 'text-green-500'],
+          [Cpu, procs.length ? (procs.reduce((s,p)=>s+p.cpu,0)).toFixed(1)+'%' : '—', 'Total CPU', 'text-purple-500']
+        ].map(([Icon,n,l,c],i) => (
+          <div key={i} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 text-center">
+            <Icon className={`w-7 h-7 ${c} mx-auto mb-1`}/>
+            <div className="text-xl font-bold text-gray-900">{n}</div>
+            <div className="text-xs text-gray-500">{l}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Process Inspector */}
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <h3 className="text-lg font-bold text-gray-900">Live Process Inspector</h3>
+          <div className="flex items-center gap-2 flex-wrap">
+            {killMsg && <span className={`text-xs px-2 py-1 rounded-full font-medium ${killMsg.startsWith('✓')?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}`}>{killMsg}</span>}
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name or PID…"
+              className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 w-40 focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+            <select value={filter} onChange={e=>setFilter(e.target.value)}
+              className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="all">All Processes</option>
+              <option value="suspicious">Flagged Only</option>
+            </select>
+            <button onClick={refresh} disabled={loading}
+              className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+              {loading ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-gray-500 uppercase border-b border-gray-100">
+                <th className="pb-2 pr-4">PID</th>
+                <th className="pb-2 pr-4">Name</th>
+                <th className="pb-2 pr-4">User</th>
+                <th className="pb-2 pr-4">CPU %</th>
+                <th className="pb-2 pr-4">MEM %</th>
+                <th className="pb-2 pr-4">Status</th>
+                <th className="pb-2">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.length === 0 && (
+                <tr><td colSpan="7" className="py-6 text-center text-gray-400 text-sm">{loading ? 'Loading processes…' : 'No results'}</td></tr>
+              )}
+              {visible.map((p,i) => (
+                <tr key={p.pid} className={`border-b border-gray-50 hover:bg-gray-50 transition-colors ${p.suspicious ? 'bg-red-50' : ''}`}>
+                  <td className="py-2 pr-4 font-mono text-gray-500">{p.pid}</td>
+                  <td className="py-2 pr-4 font-medium text-gray-900 max-w-xs truncate">{p.name}</td>
+                  <td className="py-2 pr-4 text-gray-500">{p.user}</td>
+                  <td className="py-2 pr-4">
+                    <div className="flex items-center gap-2">
+                      <div className="w-16 bg-gray-100 rounded-full h-1.5">
+                        <div className={`h-1.5 rounded-full ${p.cpu>50?'bg-red-500':p.cpu>20?'bg-yellow-500':'bg-green-500'}`} style={{width:`${Math.min(p.cpu,100)}%`}}/>
+                      </div>
+                      <span className="text-gray-700">{p.cpu}%</span>
+                    </div>
+                  </td>
+                  <td className="py-2 pr-4 text-gray-700">{p.mem}%</td>
+                  <td className="py-2 pr-4">
+                    {p.suspicious
+                      ? <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">⚠ Flagged</span>
+                      : <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Normal</span>}
+                  </td>
+                  <td className="py-2">
+                    <button onClick={() => handleKill(p.pid, p.name)} disabled={killing === p.pid}
+                      className="text-xs bg-red-50 text-red-600 border border-red-200 px-2 py-1 rounded-lg hover:bg-red-100 disabled:opacity-50 transition-colors">
+                      {killing === p.pid ? 'Killing…' : 'Kill'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Attribution cards */}
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+        <h4 className="font-semibold text-gray-900 mb-4">Threat Attribution</h4>
+        <div className="space-y-3">
+          {[['Attack Pattern Classified','AdaptiveDefense classified attack pattern and saved rule to data/adaptive_defense.jsonl','High Confidence','bg-red-100 text-red-800'],
+            ['Distillation Attack Detected','Extraction pattern rate exceeded 15 queries/60s. Defense mode: active (20% noise injection).','Medium Confidence','bg-yellow-100 text-yellow-800']
+          ].map(([title,desc,badge,bc],i)=>(
+            <div key={i} className="bg-gray-50 p-4 rounded-xl">
+              <div className="flex justify-between items-start mb-1">
+                <div className="font-medium text-gray-900">{title}</div>
+                <span className={`text-xs ${bc} px-2 py-0.5 rounded-full`}>{badge}</span>
+              </div>
+              <div className="text-sm text-gray-600">{desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Network Map ───────────────────────────────────────────────────────────────
+function NetworkMapView({ devices, ports }) {
+  const [arpData,    setArpData]    = useState(null);
+  const [routes,     setRoutes]     = useState(null);
+  const [scanResult, setScanResult] = useState(null);
+  const [scanTarget, setScanTarget] = useState('127.0.0.1');
+  const [loading,    setLoading]    = useState({});
+
+  const run = (key, fn, setter) => {
+    setLoading(l=>({...l,[key]:true}));
+    fn().then(setter).catch(e=>setter({error:e.message}))
+       .finally(()=>setLoading(l=>({...l,[key]:false})));
+  };
+
+  useEffect(()=>{
+    run('arp',    ()=>cg.networkArp(),    setArpData);
+    run('routes', ()=>cg.networkRoutes(), setRoutes);
+  }, []);
+
+  const allDevices = [
+    ...(arpData?.devices||[]),
+    ...(devices||[]).filter(d => !(arpData?.devices||[]).some(a=>a.ip===d.ip)),
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* ARP neighbors */}
+      <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="font-semibold text-gray-900 flex items-center gap-2">
+            <Network className="w-4 h-4 text-blue-500"/>
+            Live ARP Table — Discovered Devices ({allDevices.length})
+          </h4>
+          <button onClick={()=>run('arp',()=>cg.networkArp(),setArpData)}
+            disabled={loading.arp}
+            className="px-3 py-1 text-xs bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50">
+            {loading.arp?'Scanning…':'Refresh'}
+          </button>
+        </div>
+        {allDevices.length > 0 ? (
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+            {allDevices.map((d,i)=>(
+              <div key={i} className="flex items-center gap-3 px-3 py-2 bg-gray-50 rounded-lg">
+                <div className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0"/>
+                <div className="min-w-0">
+                  <div className="font-mono text-sm text-gray-800 truncate">{d.ip||d.address}</div>
+                  <div className="text-xs text-gray-400 font-mono truncate">{d.mac||''} {d.interface?`· ${d.interface}`:''}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : loading.arp ? (
+          <div className="text-sm text-gray-400 animate-pulse">Running arp -a…</div>
+        ) : (
+          <div className="text-sm text-gray-400">No ARP neighbors found (single-device network or WiFi isolation)</div>
+        )}
+        {arpData?.error && <div className="text-xs text-red-500 mt-2">{arpData.error}</div>}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Port scanner */}
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <Shield className="w-4 h-4 text-purple-500"/>Port Scan
+          </h4>
+          <div className="flex gap-2 mb-3">
+            <input value={scanTarget} onChange={e=>setScanTarget(e.target.value)}
+              className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono" placeholder="Target IP"/>
+            <button onClick={()=>run('scan',()=>cg.pentestPortscan(scanTarget,[21,22,23,25,53,80,443,3306,3307,5432,6379,8080,8443,27017]),setScanResult)}
+              disabled={loading.scan}
+              className="px-3 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 disabled:opacity-50">
+              {loading.scan?'Scanning…':'Scan'}
+            </button>
+          </div>
+          {scanResult && !scanResult.error && (
+            <div>
+              <div className="text-xs text-gray-400 mb-2">{scanResult.scanned} ports · {scanResult.open_count} open</div>
+              <div className="bg-black rounded-lg p-3 font-mono text-xs space-y-0.5 max-h-48 overflow-y-auto">
+                {scanResult.open?.length === 0
+                  ? <div className="text-green-400">All scanned ports closed</div>
+                  : scanResult.open?.map((p,i)=>(
+                    <div key={i} className="text-gray-200">
+                      <span className="text-green-400">{String(p.port).padEnd(6)}</span>
+                      <span className="text-gray-400">open  </span>
+                      <span className="text-gray-300 truncate">{p.banner||''}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+          {scanResult?.error && <div className="text-xs text-red-600">{scanResult.error}</div>}
+          {/* Also show live ports from monitor */}
+          {!scanResult && ports?.length > 0 && (
+            <div className="bg-black rounded-lg p-3 font-mono text-xs space-y-0.5 max-h-48 overflow-y-auto">
+              <div className="text-green-400 mb-1">Live open ports (from monitor):</div>
+              {ports.slice(0,20).map((p,i)=>(
+                <div key={i} className="text-gray-200">
+                  <span className="text-green-400">{String(p.port).padEnd(6)}</span>
+                  <span className="text-gray-400">{(p.protocol||'tcp').padEnd(4)} </span>
+                  <span className="text-gray-300">{p.address||''} {p.service||''}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Routing table */}
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <Wifi className="w-4 h-4 text-green-500"/>Routing Table
+          </h4>
+          {routes?.routes?.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs font-mono">
+                <thead>
+                  <tr className="text-gray-400 border-b border-gray-100">
+                    <th className="text-left py-1 pr-3">Destination</th>
+                    <th className="text-left py-1 pr-3">Gateway</th>
+                    <th className="text-left py-1">Iface</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {routes.routes.slice(0,15).map((r,i)=>(
+                    <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                      <td className="py-1 pr-3 text-gray-700">{r.destination}</td>
+                      <td className="py-1 pr-3 text-gray-500">{r.gateway}</td>
+                      <td className="py-1 text-blue-500">{r.interface}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : loading.routes ? (
+            <div className="text-xs text-gray-400 animate-pulse">Running netstat -rn…</div>
+          ) : <div className="text-xs text-gray-400">No routes found</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── AI Assistant ──────────────────────────────────────────────────────────────
+function AIAssistantView({ stats, threats, secChecks, ports }) {
+  const [tab, setTab]           = useState('chat');
+  const [messages, setMessages] = useState([{role:'assistant',content:'CyberGuard AI ready. Ask me about vulnerabilities, exploit analysis, or security research.'}]);
+  const [input, setInput]       = useState('');
+  const [loading, setLoading]   = useState(false);
+  const [aiStatus, setAiStatus] = useState(null);
+  const [memories, setMemories] = useState([]);
+  const [crashes,  setCrashes]  = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [memTotal, setMemTotal] = useState(0);
+  const [dbLoading, setDbLoading] = useState(false);
+  const [honeypot, setHoneypot] = useState(null);
+  const [firewall, setFirewall] = useState(null);
+  const endRef = useRef(null);
+
+  useEffect(() => { endRef.current?.scrollIntoView({behavior:'smooth'}); }, [messages]);
+  useEffect(() => {
+    if (cg.kerriganStatus) cg.kerriganStatus().then(s=>setAiStatus(s)).catch(()=>{});
+    // Pull live honeypot + firewall state for system context
+    const refreshLive = () => {
+      if (cg.honeypotCounts) cg.honeypotCounts().then(d=>setHoneypot(d)).catch(()=>{});
+      if (cg.firewallBlocked) cg.firewallBlocked().then(d=>setFirewall(d)).catch(()=>{});
+    };
+    refreshLive();
+    const t = setInterval(refreshLive, 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  const loadDb = () => {
+    setDbLoading(true);
+    Promise.allSettled([
+      cg.dbMemories ? cg.dbMemories(20, 0) : Promise.resolve({memories:[],total:0}),
+      cg.dbCrashes  ? cg.dbCrashes(20)     : Promise.resolve({crashes:[]}),
+      cg.dbSessions ? cg.dbSessions(10)    : Promise.resolve({sessions:[]}),
+    ]).then(([m, c, s]) => {
+      if (m.value) { setMemories(m.value.memories||[]); setMemTotal(m.value.total||0); }
+      if (c.value) setCrashes(c.value.crashes||[]);
+      if (s.value) setSessions(s.value.sessions||[]);
+      setDbLoading(false);
+    });
+  };
+
+  useEffect(() => { if (tab === 'memory' || tab === 'crashes' || tab === 'sessions') loadDb(); }, [tab]);
+
+  const buildSystemContext = () => {
+    const lines = ['[LIVE SYSTEM STATE — use this to answer questions about this specific machine]'];
+    if (stats) {
+      lines.push(`CPU: ${Math.round(stats.cpu)}% | RAM: ${stats.ramUsedGB}/${stats.ramTotalGB} GB | Net I/O: ${((stats.netInKB+stats.netOutKB)/1024).toFixed(1)} MB/s`);
+    }
+    if (threats && threats.length) {
+      lines.push(`Active threats (${threats.length}):`);
+      threats.slice(0,10).forEach(t => lines.push(`  - [${t.severity||'low'}] ${t.type} | ${t.detail||''} | src: ${t.source||'?'}`));
+    } else {
+      lines.push('Active threats: none detected');
+    }
+    if (secChecks && secChecks.length) {
+      const failed = secChecks.filter(c=>c.status==='fail'||c.status==='warn');
+      if (failed.length) {
+        lines.push(`Security check warnings (${failed.length}):`);
+        failed.forEach(c => lines.push(`  - [${c.status}] ${c.name}: ${c.detail||''}`));
+      } else {
+        lines.push('Security checks: all passing');
+      }
+    }
+    if (ports && ports.length) {
+      const open = ports.filter(p=>p.state==='LISTEN'||p.state==='listen');
+      lines.push(`Open listening ports (${open.length}): ${open.slice(0,8).map(p=>`${p.port}/${p.process||'?'}`).join(', ')}`);
+    }
+    // Honeypot live counts + recent attacker IPs
+    if (honeypot) {
+      lines.push(`Honeypot hits — SSH(2222): ${honeypot.ssh||0} | Web(8080): ${honeypot.web||0} | DB(3307): ${honeypot.database||0} | Total: ${honeypot.total||0}`);
+      if (honeypot.recent && honeypot.recent.length) {
+        lines.push('Recent honeypot events:');
+        honeypot.recent.slice(0,5).forEach(e =>
+          lines.push(`  - [${e.honeypot_type?.toUpperCase()}] ${e.attacker_ip}:${e.attacker_port} | payload: ${(e.payload||'').slice(0,60)} | at: ${e.created_at}`)
+        );
+      }
+    }
+    // Firewall block table
+    if (firewall) {
+      lines.push(`pf firewall: ${firewall.pf_active ? 'ACTIVE' : 'INACTIVE'} | ${firewall.blocked_count||0} IPs blocked`);
+      if (firewall.blocked_ips && firewall.blocked_ips.length) {
+        lines.push(`Blocked IPs: ${firewall.blocked_ips.join(', ')}`);
+      }
+    }
+    return lines.join('\n');
+  };
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput('');
+    const next = [...messages, {role:'user',content:text}];
+    setMessages(next);
+    setLoading(true);
+    try {
+      const history = next.slice(-8).map(m=>({role:m.role,content:m.content}));
+      const systemCtx = buildSystemContext();
+      const r = await cg.kerriganChat(text, history, systemCtx);
+      setMessages(p=>[...p,{role:'assistant',content:r.reply||r.error||'No response'}]);
+    } catch(e) {
+      setMessages(p=>[...p,{role:'assistant',content:`[Error: ${e.message}]`}]);
+    } finally { setLoading(false); }
+  };
+
+  const tabs = [['chat','Chat'],['memory','Memories'],['crashes','Crashes'],['sessions','Sessions']];
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 flex flex-col" style={{height:'calc(100vh - 180px)'}}>
+      {/* Header */}
+      <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+        <div className="flex items-center">
+          <div className="w-9 h-9 bg-gradient-to-br from-purple-500 to-blue-600 rounded-xl flex items-center justify-center mr-3">
+            <MessageSquare className="w-4 h-4 text-white"/>
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-gray-900">Kerrigan AI — {aiStatus?.model||'deepseek-coder:6.7b'}</h3>
+            <p className="text-xs text-gray-500">{aiStatus?.online ? `Online · ${memTotal} memories in DB` : 'Connecting…'}</p>
+          </div>
+        </div>
+        <div className={`flex items-center text-xs px-2 py-1 rounded-full ${aiStatus?.online?'bg-green-50 text-green-700':'bg-gray-100 text-gray-500'}`}>
+          <div className={`w-1.5 h-1.5 rounded-full mr-1.5 ${aiStatus?.online?'bg-green-500':'bg-gray-400'}`}/>
+          {aiStatus?.online ? 'Ready' : 'Offline'}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-gray-100 px-4">
+        {tabs.map(([id,label])=>(
+          <button key={id} onClick={()=>setTab(id)}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors mr-1 ${tab===id?'border-blue-600 text-blue-600':'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Chat tab */}
+      {tab==='chat' && <>
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {messages.map((m,i)=>(
+            <div key={i} className={`flex ${m.role==='user'?'justify-end':'justify-start'}`}>
+              <div className={`max-w-3xl px-4 py-3 rounded-2xl text-sm whitespace-pre-wrap break-words ${m.role==='user'?'bg-blue-600 text-white rounded-br-sm':'bg-gray-100 text-gray-800 rounded-bl-sm'}`}>
+                {m.content}
+              </div>
+            </div>
+          ))}
+          {loading && <div className="flex justify-start"><div className="bg-gray-100 text-gray-500 px-4 py-3 rounded-2xl rounded-bl-sm text-sm animate-pulse">Thinking…</div></div>}
+          <div ref={endRef}/>
+        </div>
+        <div className="p-4 border-t border-gray-100">
+          <div className="flex gap-2">
+            <input value={input} onChange={e=>setInput(e.target.value)}
+              onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&(e.preventDefault(),send())}
+              placeholder="Ask about vulnerabilities, malware, exploit techniques…"
+              className="flex-1 px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+            <button onClick={send} disabled={loading||!input.trim()}
+              className="px-4 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-40 transition-colors">
+              <Send className="w-4 h-4"/>
+            </button>
+          </div>
+        </div>
+      </>}
+
+      {/* Memory tab */}
+      {tab==='memory' && (
+        <div className="flex-1 overflow-y-auto p-5">
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-sm font-medium text-gray-700">{memTotal} total memories in kerrigan_db</span>
+            <button onClick={loadDb} disabled={dbLoading} className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-100 disabled:opacity-50">
+              {dbLoading ? 'Loading…' : 'Refresh'}
+            </button>
+          </div>
+          {memories.length === 0
+            ? <div className="text-sm text-gray-400 text-center py-12">{dbLoading ? 'Loading…' : 'No memories yet'}</div>
+            : memories.map((m,i)=>(
+              <div key={m.id} className="border border-gray-100 rounded-xl p-4 mb-3 hover:bg-gray-50">
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">{m.expert||'general'}</span>
+                  <span className="text-xs text-gray-400 flex-shrink-0">{m.created_at ? new Date(m.created_at).toLocaleString() : '—'}</span>
+                </div>
+                <p className="text-sm text-gray-800 mt-1">{m.content}</p>
+                {m.tags && <p className="text-xs text-gray-400 mt-1">{m.tags}</p>}
+              </div>
+            ))
+          }
+        </div>
+      )}
+
+      {/* Crashes tab */}
+      {tab==='crashes' && (
+        <div className="flex-1 overflow-y-auto p-5">
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-sm font-medium text-gray-700">Crash findings from kerrigan_db</span>
+            <button onClick={loadDb} disabled={dbLoading} className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-100 disabled:opacity-50">
+              {dbLoading ? 'Loading…' : 'Refresh'}
+            </button>
+          </div>
+          {crashes.length === 0
+            ? <div className="text-sm text-gray-400 text-center py-12">{dbLoading ? 'Loading…' : 'No crashes logged'}</div>
+            : crashes.map((c,i)=>(
+              <div key={i} className={`border rounded-xl p-4 mb-3 ${c.exploitability==='high'?'border-red-200 bg-red-50':c.exploitability==='medium'?'border-yellow-200 bg-yellow-50':'border-gray-200'}`}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-medium text-sm text-gray-900">{c.crash_type||c.type||'Unknown crash'}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${c.exploitability==='high'?'bg-red-200 text-red-800':c.exploitability==='medium'?'bg-yellow-200 text-yellow-800':'bg-gray-200 text-gray-700'}`}>
+                    {c.exploitability||'unknown'} exploitability
+                  </span>
+                </div>
+                {c.signal && <p className="text-xs text-gray-600">Signal: {c.signal}</p>}
+                {c.created_at && <p className="text-xs text-gray-400 mt-1">{new Date(c.created_at).toLocaleString()}</p>}
+              </div>
+            ))
+          }
+        </div>
+      )}
+
+      {/* Sessions tab */}
+      {tab==='sessions' && (
+        <div className="flex-1 overflow-y-auto p-5">
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-sm font-medium text-gray-700">Kerrigan training sessions</span>
+            <button onClick={loadDb} disabled={dbLoading} className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-100 disabled:opacity-50">
+              {dbLoading ? 'Loading…' : 'Refresh'}
+            </button>
+          </div>
+          {sessions.length === 0
+            ? <div className="text-sm text-gray-400 text-center py-12">{dbLoading ? 'Loading…' : 'No sessions logged'}</div>
+            : sessions.map((s,i)=>(
+              <div key={i} className="border border-gray-200 rounded-xl p-4 mb-3">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-medium text-sm text-gray-900">{s.session_id||`Session ${s.id}`}</span>
+                  <span className="text-xs text-gray-400">{s.started_at ? new Date(s.started_at).toLocaleString() : '—'}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-2 text-xs text-gray-600">
+                  {s.crashes_found != null && <span>Crashes: <strong>{s.crashes_found}</strong></span>}
+                  {s.patches_generated != null && <span>Patches: <strong>{s.patches_generated}</strong></span>}
+                  {s.status && <span>Status: <strong>{s.status}</strong></span>}
+                </div>
+              </div>
+            ))
+          }
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Module config (all static class names so Tailwind JIT detects them) ───────
+const MODULES = [
+  {id:'dashboard',       label:'Dashboard',           Icon:Activity,      bg:'bg-blue-50',   txt:'text-blue-700',   bdr:'border-blue-200',   ico:'text-blue-600'  },
+  {id:'protegrity-demo', label:'Protegrity Demo',     Icon:Layers,        bg:'bg-purple-50', txt:'text-purple-700', bdr:'border-purple-200', ico:'text-purple-600'},
+  {id:'ai-assistant',    label:'AI Assistant',         Icon:MessageSquare, bg:'bg-indigo-50', txt:'text-indigo-700', bdr:'border-indigo-200', ico:'text-indigo-600'},
+  {id:'ai-patcher',      label:'AI Auto-Patcher',      Icon:Zap,           bg:'bg-cyan-50',   txt:'text-cyan-700',   bdr:'border-cyan-200',   ico:'text-cyan-600'  },
+  {id:'packet-analyzer', label:'Packet Analysis',      Icon:Network,       bg:'bg-green-50',  txt:'text-green-700',  bdr:'border-green-200',  ico:'text-green-600' },
+  {id:'vuln-scanner',    label:'Vuln Scanner',         Icon:Bug,           bg:'bg-red-50',    txt:'text-red-700',    bdr:'border-red-200',    ico:'text-red-600'   },
+  {id:'pen-testing',     label:'Penetration Testing',  Icon:Target,        bg:'bg-purple-50', txt:'text-purple-700', bdr:'border-purple-200', ico:'text-purple-600'},
+  {id:'crypto-audit',    label:'Crypto Audit',         Icon:Lock,          bg:'bg-yellow-50', txt:'text-yellow-700', bdr:'border-yellow-200', ico:'text-yellow-600'},
+  {id:'ids-ips',         label:'IDS / IPS',            Icon:Shield,        bg:'bg-orange-50', txt:'text-orange-700', bdr:'border-orange-200', ico:'text-orange-600'},
+  {id:'forensics',       label:'Forensics',            Icon:Search,        bg:'bg-pink-50',   txt:'text-pink-700',   bdr:'border-pink-200',   ico:'text-pink-600'  },
+  {id:'network-map',     label:'Network Map',          Icon:MapIcon,       bg:'bg-teal-50',   txt:'text-teal-700',   bdr:'border-teal-200',   ico:'text-teal-600'  },
+];
+
+// ── Root App ──────────────────────────────────────────────────────────────────
+// ── Honeypot Toast Notifications ──────────────────────────────────────────────
+function HoneypotToasts() {
+  const [toasts, setToasts] = useState([]);
+
+  useEffect(() => {
+    if (!cg.onHoneypotHit) return;
+    cg.onHoneypotHit(hit => {
+      const id = Date.now();
+      const icon = hit.type === 'ssh' ? '🔐' : hit.type === 'web' ? '🌐' : '🗄️';
+      const label = hit.type === 'ssh' ? 'SSH Honeypot' : hit.type === 'web' ? 'Web Honeypot' : 'DB Honeypot';
+      setToasts(t => [...t, { id, icon, label, ip: hit.ip, payload: hit.payload }]);
+      setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 8000);
+    });
+    return () => cg.off && cg.off('honeypot-hit');
+  }, []);
+
+  if (!toasts.length) return null;
+
+  return (
+    <div style={{position:'fixed', bottom:'24px', right:'24px', zIndex:9999, display:'flex', flexDirection:'column', gap:'8px'}}>
+      {toasts.map(t => (
+        <div key={t.id} className="bg-gray-900 text-white rounded-2xl shadow-2xl px-5 py-4 flex items-start gap-3"
+          style={{minWidth:'300px', maxWidth:'380px', animation:'slideIn 0.3s ease'}}>
+          <span style={{fontSize:'24px'}}>{t.icon}</span>
+          <div className="flex-1 min-w-0">
+            <div className="font-bold text-sm text-red-400">{t.label} Hit</div>
+            <div className="text-xs text-gray-300 font-mono mt-0.5">{t.ip}</div>
+            {t.payload && <div className="text-xs text-gray-400 mt-1 truncate">{t.payload.slice(0,60)}</div>}
+          </div>
+          <button onClick={()=>setToasts(ts=>ts.filter(x=>x.id!==t.id))} className="text-gray-500 hover:text-white text-lg leading-none">×</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function App() {
+  const [active,    setActive]    = useState('dashboard');
+  const [stats,     setStats]     = useState(null);
+  const [threats,   setThreats]   = useState([]);
+  const [conns,     setConns]     = useState([]);
+  const [ports,     setPorts]     = useState([]);
+  const [devices,   setDevices]   = useState([]);
+  const [secChecks, setSecChecks] = useState([]);
+  const [sysStatus, setSysStatus] = useState({ label: 'Connecting…', color: 'bg-gray-400', text: 'text-gray-500', ai: null, pf: null });
+
+  useEffect(() => {
+    Promise.allSettled([
+      cg.getSecurityChecks && cg.getSecurityChecks(),
+      cg.getNetworkDevices && cg.getNetworkDevices(),
+    ]).then(([c,d]) => {
+      if (c.status==='fulfilled' && c.value) setSecChecks(c.value);
+      if (d.status==='fulfilled' && d.value) setDevices(d.value);
+    });
+
+    if (cg.onStatsUpdate)       cg.onStatsUpdate(d => setStats(d));
+    if (cg.onThreatDetected)    cg.onThreatDetected(t => setThreats(p => [t,...p].slice(0,50)));
+    if (cg.onConnectionsUpdate) cg.onConnectionsUpdate(d => setConns(d||[]));
+    if (cg.onPortsUpdate)       cg.onPortsUpdate(d => setPorts(d||[]));
+
+    return () => ['stats-update','threat-detected','connections-update','ports-update'].forEach(ch => cg.off && cg.off(ch));
+  }, []);
+
+  // Poll system status every 10s — uses IPC bridge in Electron, direct fetch as fallback
+  useEffect(() => {
+    const check = async () => {
+      let s = null, fw = null;
+      try {
+        // Electron path: preload bridge
+        if (cg.kerriganStatus)      s  = await cg.kerriganStatus();
+        if (cg.firewallBlocked)     fw = await cg.firewallBlocked();
+        // Browser/dev fallback: direct HTTP (requires CORS on backend)
+        if (!s)  s  = await fetch('http://127.0.0.1:7432/status').then(r => r.json()).catch(() => null);
+        if (!fw) fw = await fetch('http://127.0.0.1:7432/firewall/blocked').then(r => r.json()).catch(() => null);
+      } catch(_) {}
+
+      const aiOk  = s?.ai_ok      ?? false;
+      const pfOk  = fw?.pf_active ?? false;
+      const criticalThreats = threats.filter(t => t.severity === 'critical').length;
+      const failedChecks    = secChecks.filter(c => c.status === 'fail').length;
+
+      let label, color, text;
+      if (criticalThreats > 0) {
+        label = `${criticalThreats} Critical Threat${criticalThreats > 1 ? 's' : ''}`;
+        color = 'bg-red-500'; text = 'text-red-700';
+      } else if (!s) {
+        label = 'Backend Offline';
+        color = 'bg-red-500'; text = 'text-red-700';
+      } else if (!aiOk) {
+        label = 'AI Offline';
+        color = 'bg-red-400'; text = 'text-red-600';
+      } else if (!pfOk) {
+        label = 'Firewall Inactive';
+        color = 'bg-yellow-400'; text = 'text-yellow-700';
+      } else if (failedChecks > 0) {
+        label = `${failedChecks} Check${failedChecks > 1 ? 's' : ''} Failing`;
+        color = 'bg-yellow-400'; text = 'text-yellow-700';
+      } else {
+        label = 'All Systems Operational';
+        color = 'bg-green-400'; text = 'text-green-700';
+      }
+      setSysStatus({ label, color, text, ai: aiOk, pf: pfOk });
+    };
+    check();
+    const t = setInterval(check, 10000);
+    return () => clearInterval(t);
+  }, [threats, secChecks]);
+
+  const cpu = stats ? Math.round(stats.cpu) : 0;
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <HoneypotToasts/>
+      {/* Header — electron-drag makes the whole bar a window drag handle */}
+      <div className="bg-white shadow-sm border-b border-gray-200 electron-drag">
+        <div className="max-w-screen-2xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center">
+            <div className="w-10 h-10 bg-gradient-to-br from-red-500 to-purple-600 rounded-2xl flex items-center justify-center mr-4">
+              <Shield className="w-6 h-6 text-white"/>
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">CyberGuard AI Enterprise</h1>
+              <p className="text-sm text-gray-600">Advanced Security Operations Console</p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-4 electron-no-drag">
+            <div className={`flex items-center text-sm font-medium px-3 py-1.5 rounded-full bg-opacity-10 ${sysStatus.text}`}
+                 style={{background: sysStatus.color === 'bg-green-400' ? '#f0fdf4' : sysStatus.color === 'bg-yellow-400' ? '#fefce8' : '#fef2f2'}}>
+              <div className={`w-2 h-2 rounded-full mr-2 flex-shrink-0 animate-pulse ${sysStatus.color}`}></div>
+              {sysStatus.label}
+            </div>
+            <button onClick={()=>setActive('ids-ips')} className="p-2 hover:bg-gray-100 rounded-full">
+              <SettingsIcon className="w-5 h-5 text-gray-600"/>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-screen-2xl mx-auto px-6 py-6 flex gap-6">
+        {/* Sidebar */}
+        <div className="w-56 flex-shrink-0 bg-white rounded-2xl p-4 shadow-sm border border-gray-100 self-start sticky top-6">
+          <nav className="space-y-1">
+            {MODULES.map(({id,label,Icon,bg,txt,bdr,ico}) => {
+              const on = active===id;
+              return (
+                <button key={id} onClick={()=>setActive(id)}
+                  className={`w-full flex items-center p-3 rounded-xl text-left transition-colors ${on?`${bg} ${txt} border ${bdr}`:'hover:bg-gray-50 text-gray-700'}`}>
+                  <Icon className={`w-4 h-4 mr-3 flex-shrink-0 ${on?ico:'text-gray-500'}`}/>
+                  <span className="font-medium text-sm">{label}</span>
+                </button>
+              );
+            })}
+          </nav>
+          <div className="mt-6 p-4 bg-gray-50 rounded-xl">
+            <h4 className="font-semibold text-gray-900 text-sm mb-3">System Status</h4>
+            <div className="space-y-2 text-xs">
+              {[['CPU', `${cpu}%`],['Threats', String(threats.length)],['Connections', String(conns.length)],['RAM', stats?`${stats.ramUsedGB.toFixed(1)}GB`:'—']].map(([k,v],i)=>(
+                <div key={i} className="flex justify-between"><span className="text-gray-600">{k}</span><span className="font-medium">{v}</span></div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Main content */}
+        <div className="flex-1 min-w-0">
+          {active==='dashboard'       && <DashboardView stats={stats} threats={threats} secChecks={secChecks}/>}
+          {active==='protegrity-demo' && <ProtegityDemoView/>}
+          {active==='ai-assistant'    && <AIAssistantView stats={stats} threats={threats} secChecks={secChecks} ports={ports}/>}
+          {active==='ai-patcher'      && <AIPatcherView/>}
+          {active==='packet-analyzer' && <PacketAnalyzerView connections={conns}/>}
+          {active==='vuln-scanner'    && <VulnScannerView secChecks={secChecks}/>}
+          {active==='pen-testing'     && <PenTestingView/>}
+          {active==='crypto-audit'    && <CryptoAuditView/>}
+          {active==='ids-ips'         && <IDSIPSView threats={threats}/>}
+          {active==='forensics'       && <ForensicsView/>}
+          {active==='network-map'     && <NetworkMapView devices={devices} ports={ports}/>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -1,0 +1,86 @@
+{
+  "name": "cyberguard",
+  "version": "1.0.0",
+  "description": "CyberGuard — AI-Powered Security Monitor",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist:mac": "electron-builder --mac --publish always",
+    "dist:win": "electron-builder --win --publish always",
+    "dist:all": "electron-builder --mac --win --publish always",
+    "pack": "electron-builder --dir"
+  },
+  "build": {
+    "appId": "com.cyberguard.app",
+    "productName": "CyberGuard",
+    "copyright": "Copyright © 2026 CyberGuard",
+    "publish": {
+      "provider": "github",
+      "owner": "TushaeBXN",
+      "repo": "cyberguard"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "icon": "assets/icon.png"
+    },
+    "dmg": {
+      "title": "CyberGuard ${version}",
+      "background": "assets/dmg-bg.png",
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "installerHeaderIcon": "assets/icon.ico"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    }
+  },
+  "devDependencies": {
+    "@babel/standalone": "^7.29.7",
+    "electron": "^27.0.0",
+    "electron-builder": "^24.9.1",
+    "tailwindcss": "^4.3.1"
+  },
+  "dependencies": {
+    "electron-updater": "^6.1.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "systeminformation": "^5.21.0"
+  }
+}
