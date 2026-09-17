@@ -2,7 +2,6 @@
 Real end-to-end pipeline:
   GitHub Issues → Protegrity Gate 1 (Protect) → Protegrity Gate 2 (Unprotect) → Google Sheets
 
-All platform access goes through Composio — this project holds no GitHub credentials.
 Each stage is recorded so the UI can show raw / protected / unprotected side-by-side.
 """
 from __future__ import annotations
@@ -10,62 +9,50 @@ import json, logging, re, sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import requests as req_lib
+
 sys.path.insert(0, str(Path(__file__).parent))
 from config import Config, load_config
 import protegrity_bridge as pb
-import composio_bridge as cc
 
 logger = logging.getLogger(__name__)
 
-# Composio has renamed this tool across releases; try the known aliases.
-GITHUB_LIST_ISSUES_TOOLS = [
-    "GITHUB_LIST_REPOSITORY_ISSUES",
-    "GITHUB_ISSUES_LIST_FOR_REPO",
-    "GITHUB_LIST_ISSUES",
-]
 
-GITHUB_GET_ISSUE_TOOLS = [
-    "GITHUB_GET_AN_ISSUE",
-    "GITHUB_ISSUES_GET",
-    "GITHUB_GET_ISSUE",
-]
-
-
-def _coerce_issue_list(data: Any) -> List[Dict[str, Any]]:
-    """Composio wraps GitHub payloads inconsistently; unwrap to a list of issues."""
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in ("details", "data", "items", "issues", "response_data"):
-            value = data.get(key)
-            if isinstance(value, list):
-                return value
-    raise cc.ComposioError(f"Unexpected GitHub payload from Composio: {type(data).__name__}")
-
-
-# ── GitHub (via Composio) ─────────────────────────────────────────────────────
+# ── GitHub ────────────────────────────────────────────────────────────────────
 
 def fetch_github_issues(
     repo: str,
+    github_token: Optional[str] = None,
     limit: int = 5,
-    state: str = "all",
-    sort: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Fetch the last `limit` issues from a repository through the Composio GITHUB
-    toolkit. repo format: "owner/repo-name"
+    Fetch the last `limit` issues (any state) from a GitHub repository.
+    repo format: "owner/repo-name"
     """
     if "/" not in repo:
         raise ValueError(f"repo must be 'owner/repo', got: {repo!r}")
-    cc.require_app("GITHUB")
-    owner, name = repo.split("/", 1)
-    params: Dict[str, Any] = {"owner": owner, "repo": name, "state": state, "per_page": limit}
-    if sort:
-        params["sort"] = sort
-        params["direction"] = "desc"
-    data = cc.execute_first(GITHUB_LIST_ISSUES_TOOLS, params)
-    # GitHub returns PRs on the issues endpoint — filter them out.
-    issues = [i for i in _coerce_issue_list(data) if "pull_request" not in i]
+
+    headers = {"Accept": "application/vnd.github.v3+json",
+               "User-Agent": "ProtegrityDemo/1.0"}
+    if github_token:
+        headers["Authorization"] = f"token {github_token}"
+
+    url = f"https://api.github.com/repos/{repo}/issues"
+    resp = req_lib.get(
+        url,
+        params={"state": "all", "per_page": limit, "page": 1},
+        headers=headers,
+        timeout=20,
+    )
+    if resp.status_code == 404:
+        raise ValueError(f"Repository '{repo}' not found or not accessible.")
+    if resp.status_code == 401:
+        raise ValueError("GitHub token is invalid or expired.")
+    resp.raise_for_status()
+
+    issues = resp.json()
+    # GitHub API includes PRs in /issues — filter them out
+    issues = [i for i in issues if "pull_request" not in i]
     return issues[:limit]
 
 
@@ -89,6 +76,7 @@ def _slim_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
 
 def run_full_pipeline(
     repo: str,
+    github_token: Optional[str] = None,
     cfg: Optional[Config] = None,
     rbac_role: str = "admin",
 ) -> Dict[str, Any]:
@@ -108,8 +96,8 @@ def run_full_pipeline(
     cfg = cfg or load_config()
 
     # ── Stage 1: Fetch ────────────────────────────────────────────────────────
-    logger.info("Stage 1: Fetching GitHub issues from %s via Composio", repo)
-    raw_issues = fetch_github_issues(repo, limit=5)
+    logger.info("Stage 1: Fetching GitHub issues from %s", repo)
+    raw_issues = fetch_github_issues(repo, github_token, limit=5)
     slimmed = [_slim_issue(i) for i in raw_issues]
     raw_json = json.dumps(slimmed, indent=2)
     logger.info("Fetched %d issues", len(slimmed))
@@ -144,7 +132,6 @@ def run_full_pipeline(
             "issues": slimmed,
             "json": raw_json,
             "count": len(slimmed),
-            "source": "composio",
         },
         "stage_2_protect": {
             "protected_json": protected_json,

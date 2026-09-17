@@ -1,2 +1,2 @@
-protegrity-ai-developer-python==1.2.1
+protegrity-ai-developer-python==1.2.2
 ipywidgets>=8

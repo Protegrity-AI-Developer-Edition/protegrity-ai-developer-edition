@@ -10,8 +10,11 @@ Flow:
   4.  Deliver a formatted Slack DM to each recipient
 
 Recipient is identified by Slack @username, display name, real name, or email.
-GitHub and Slack are both reached through Composio — this project stores no
-platform tokens of its own.
+A Slack Bot Token (xoxb-...) is required.  Create one at:
+  https://api.slack.com/apps  →  OAuth & Permissions
+Scopes needed:
+  chat:write   im:write   users:read   users:read.email
+Then install the app to your workspace and copy the Bot User OAuth Token.
 """
 from __future__ import annotations
 
@@ -19,48 +22,44 @@ import json, logging, re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import requests as rlib
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+
 from config import Config, load_config
 import protegrity_bridge as pb
-import composio_bridge as cc
 from pipeline import fetch_github_issues, _slim_issue
 
 logger = logging.getLogger(__name__)
 
-# Composio renames Slack tools between releases; try the known aliases.
-SLACK_TOOLS = {
-    "auth_test": ["SLACK_TEST_AUTH", "SLACK_AUTH_TEST", "SLACK_CHECKS_API_CALLING_CODE"],
-    "find_by_email": ["SLACK_FIND_USER_BY_EMAIL_ADDRESS", "SLACK_FIND_USERS_BY_EMAIL_ADDRESS",
-                      "SLACK_LOOKUP_USER_BY_EMAIL"],
-    "list_users": ["SLACK_LIST_ALL_USERS", "SLACK_LIST_ALL_SLACK_TEAM_USERS_WITH_PAGINATION",
-                   "SLACK_FETCH_ALL_SLACK_TEAM_USERS_WITH_PAGINATION"],
-    "open_dm": ["SLACK_OPEN_DM", "SLACK_INITIATES_OR_RESUMES_A_DIRECT_MESSAGE_OR_MULTI_PERSON_DIRECT_MESSAGE",
-                "SLACK_OPENS_OR_RESUMES_A_DIRECT_MESSAGE_OR_MULTI_PERSON_DIRECT_MESSAGE"],
-    "post_message": ["SLACK_SENDS_A_MESSAGE_TO_A_SLACK_CHANNEL", "SLACK_CHAT_POST_MESSAGE",
-                     "SLACK_SEND_MESSAGE"],
-}
-
-
-def _dig(payload: Any, *keys: str) -> Any:
-    """Return the first present key from a possibly-nested Composio response."""
-    if not isinstance(payload, dict):
-        return None
-    for key in keys:
-        if key in payload:
-            return payload[key]
-    for nested in ("data", "response_data", "details"):
-        found = _dig(payload.get(nested), *keys)
-        if found is not None:
-            return found
-    return None
-
 # ── issue helpers ─────────────────────────────────────────────────────────────
 
-def fetch_today_issues(repo: str, limit: int = 5) -> List[Dict[str, Any]]:
+def fetch_today_issues(
+    repo: str,
+    github_token: Optional[str],
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
     """
     Fetch up to `limit` issues created OR updated in the last 24 h.
     Falls back to the most-recent `limit` issues if none are from today.
     """
-    issues = fetch_github_issues(repo, limit=20, state="open", sort="updated")
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "ProtegrityDemo/1.0",
+    }
+    if github_token:
+        headers["Authorization"] = f"token {github_token}"
+
+    now = datetime.now(timezone.utc)
+    url = f"https://api.github.com/repos/{repo}/issues"
+    resp = rlib.get(
+        url,
+        params={"state": "open", "sort": "updated", "direction": "desc", "per_page": 20},
+        headers=headers,
+        timeout=20,
+    )
+    resp.raise_for_status()
+    issues = [i for i in resp.json() if "pull_request" not in i]
 
     # Try to return issues updated within the last 24 h
     today = [
@@ -81,71 +80,52 @@ def _hours_ago(iso: str) -> float:
         return float("inf")
 
 
-# ── Slack client (via Composio) ───────────────────────────────────────────────
+# ── Slack helpers ─────────────────────────────────────────────────────────────
 
-class SlackClient:
-    """Talks to Slack through the Composio SLACK toolkit, which holds the auth."""
+def _resolve_user_id(client: WebClient, identifier: str) -> Optional[str]:
+    """
+    Turn a Slack identifier (email, @username, display name, real name) into a Slack user ID.
+    Returns None if not found.
+    """
+    identifier = identifier.strip().lstrip("@")
 
-    def __init__(self, user_id: Optional[str] = None):
-        cc.require_app("SLACK")
-        self._user_id = user_id or cc.DEFAULT_USER_ID
+    # Try by email first (most reliable)
+    if "@" in identifier and "." in identifier.split("@")[-1]:
+        try:
+            r = client.users_lookupByEmail(email=identifier)
+            return r["user"]["id"]
+        except SlackApiError:
+            pass
 
-    def _call(self, key: str, params: Dict[str, Any]) -> Any:
-        return cc.execute_first(SLACK_TOOLS[key], params, user_id=self._user_id)
+    # Walk the members list and match display_name / real_name / name
+    cursor = None
+    while True:
+        kwargs: Dict[str, Any] = {"limit": 200}
+        if cursor:
+            kwargs["cursor"] = cursor
+        try:
+            page = client.users_list(**kwargs)
+        except SlackApiError as e:
+            logger.warning("users_list error: %s", e)
+            break
+        for member in page.get("members", []):
+            if member.get("deleted") or member.get("is_bot"):
+                continue
+            profile = member.get("profile", {})
+            if (member.get("name", "").lower() == identifier.lower()
+                    or profile.get("display_name", "").lower() == identifier.lower()
+                    or profile.get("real_name", "").lower() == identifier.lower()):
+                return member["id"]
+        cursor = page.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            break
+    return None
 
-    def auth_test(self) -> str:
-        data = self._call("auth_test", {})
-        return _dig(data, "user", "user_name", "bot_name") or "ProtegrityBot"
 
-    def resolve_user_id(self, identifier: str) -> Optional[str]:
-        identifier = identifier.strip().lstrip("@")
-        if "@" in identifier and "." in identifier.split("@")[-1]:
-            try:
-                data = self._call("find_by_email", {"email": identifier})
-                user = _dig(data, "user") or {}
-                user_id = user.get("id") if isinstance(user, dict) else None
-                if user_id:
-                    return user_id
-            except cc.ComposioError as e:
-                logger.info("Slack email lookup failed for %s: %s", identifier, e)
-
-        cursor = None
-        while True:
-            params: Dict[str, Any] = {"limit": 200}
-            if cursor:
-                params["cursor"] = cursor
-            try:
-                data = self._call("list_users", params)
-            except cc.ComposioError as e:
-                logger.warning("Slack list_users failed: %s", e)
-                return None
-            members = _dig(data, "members") or []
-            for member in members:
-                if member.get("deleted") or member.get("is_bot"):
-                    continue
-                profile = member.get("profile", {}) or {}
-                if (member.get("name", "").lower() == identifier.lower()
-                        or profile.get("display_name", "").lower() == identifier.lower()
-                        or profile.get("real_name", "").lower() == identifier.lower()):
-                    return member.get("id")
-            cursor = ((_dig(data, "response_metadata") or {}) or {}).get("next_cursor")
-            if not cursor:
-                return None
-
-    def open_dm(self, user_id: str) -> str:
-        data = self._call("open_dm", {"users": user_id})
-        channel = _dig(data, "channel") or {}
-        channel_id = channel.get("id") if isinstance(channel, dict) else channel
-        if not channel_id:
-            raise cc.ComposioError(f"Composio did not return a DM channel for user {user_id}")
-        return channel_id
-
-    def post_message(self, channel: str, text: str, blocks: List[Dict]) -> None:
-        self._call("post_message", {
-            "channel": channel,
-            "text": text,
-            "blocks": json.dumps(blocks),
-        })
+def _open_dm(client: WebClient, user_id: str) -> str:
+    """Open (or reuse) a DM channel with a user and return the channel ID."""
+    r = client.conversations_open(users=[user_id])
+    return r["channel"]["id"]
 
 
 def _build_blocks(
@@ -202,98 +182,36 @@ def _build_blocks(
     return blocks
 
 
-# ── Mock GitHub issues — used when preview_mode=True ─────────────────────────
-MOCK_GITHUB_ISSUES = [
-    {
-        "number": 2341, "state": "open",
-        "title": "Payment failure for customer John Smith — card ending 1234",
-        "user": {"login": "alice.johnson", "email": "alice.johnson@acme.com"},
-        "body": ("Customer John Smith (john.smith@acme.com, +1-650-555-0147) reported payment failure. "
-                 "SSN on file: 123-45-6789. CC: 4532-0151-1283-0366 expires 09/28."),
-        "labels": ["bug", "payments"],
-        "created_at": "2026-05-15T09:00:00Z", "updated_at": "2026-05-15T09:30:00Z",
-        "html_url": "https://github.com/demo/secure-app/issues/2341",
-    },
-    {
-        "number": 2342, "state": "open",
-        "title": "Update PII fields for user profile — DOB mismatch",
-        "user": {"login": "bob.wilson", "email": "bob.wilson@acme.com"},
-        "body": ("Alice Johnson (DOB: 1985-07-22, IP: 192.168.1.100) has a DOB mismatch. "
-                 "Contact: alice.j@personal.com or +1 (415) 555-2671."),
-        "labels": ["data-quality"],
-        "created_at": "2026-05-15T10:00:00Z", "updated_at": "2026-05-15T10:15:00Z",
-        "html_url": "https://github.com/demo/secure-app/issues/2342",
-    },
-    {
-        "number": 2343, "state": "open",
-        "title": "SSN validation failing in onboarding flow",
-        "user": {"login": "carol.white", "email": "carol.white@acme.com"},
-        "body": ("Onboarding for David Clark (SSN: 321-54-9876, "
-                 "Address: 123 Market St, San Francisco, CA 94105) returns error 422. "
-                 "Bank account: 4012-8888-8888-1881."),
-        "labels": ["onboarding", "validation"],
-        "created_at": "2026-05-15T08:30:00Z", "updated_at": "2026-05-15T09:00:00Z",
-        "html_url": "https://github.com/demo/secure-app/issues/2343",
-    },
-    {
-        "number": 2344, "state": "open",
-        "title": "Email notification sent to wrong address",
-        "user": {"login": "dave.martin"},
-        "body": ("Password reset for frank.harris@example.com was sent to frank.harris@gmail.com. "
-                 "Customer DOB 1978-11-30, phone +1 (212) 555-0147."),
-        "labels": ["email", "privacy"],
-        "created_at": "2026-05-14T16:00:00Z", "updated_at": "2026-05-15T07:00:00Z",
-        "html_url": "https://github.com/demo/secure-app/issues/2344",
-    },
-    {
-        "number": 2345, "state": "open",
-        "title": "GDPR export request — grace.martinez@business.org",
-        "user": {"login": "security-bot"},
-        "body": ("GDPR export for Grace Martinez (grace.m@business.org, +1 (312) 555-9876, "
-                 "456 Oak Ave, Chicago, IL 60601). Request ID: GDPR-2026-0512."),
-        "labels": ["gdpr", "compliance"],
-        "created_at": "2026-05-12T11:00:00Z", "updated_at": "2026-05-15T06:00:00Z",
-        "html_url": "https://github.com/demo/secure-app/issues/2345",
-    },
-]
-
 # ── main pipeline ─────────────────────────────────────────────────────────────
 
 def run_slack_pipeline(
+    slack_token: str,
     repo: str,
+    github_token: Optional[str],
     recipients: List[Dict[str, str]],   # [{"identifier": "...", "role": "admin|viewer"}, ...]
     cfg: Optional[Config] = None,
     dry_run: bool = False,
-    preview_mode: bool = False,
-    use_sgr: bool = True,
 ) -> Dict[str, Any]:
     """
-    Run the full GitHub → Protegrity → Slack pipeline. Both platforms are
-    reached through Composio.
+    Run the full GitHub → Protegrity → Slack pipeline.
 
-    preview_mode=True  — use MOCK_GITHUB_ISSUES (no GitHub call), force dry_run
-    preview_mode=False — fetch real issues; send real Slack DMs when dry_run=False
+    Each recipient dict must have:
+      identifier  — Slack email, @username, or display name
+      role        — "admin" (see plain text) or "viewer" (see tokenised)
+
+    Returns a result dict with per-recipient outcomes.
     """
     if cfg is None:
         cfg = load_config()
 
-    if preview_mode:
-        dry_run = True  # preview always implies dry-run
-
-    can_send = cc.is_app_connected("SLACK")
-
-    # ── Stage 1: Fetch (or load mock) issues ────────────────────────────────
-    if preview_mode:
-        issues = MOCK_GITHUB_ISSUES
-        repo = repo or "demo/secure-app"
-    else:
-        issues = fetch_today_issues(repo, limit=5)
-        if not issues:
-            return {
-                "ok": False,
-                "error": f"No issues found in {repo}",
-                "issues_found": 0,
-            }
+    # ── Stage 1: Fetch today's issues ─────────────────────────────────────────
+    issues = fetch_today_issues(repo, github_token, limit=5)
+    if not issues:
+        return {
+            "ok": False,
+            "error": f"No issues found in {repo}",
+            "issues_found": 0,
+        }
 
     # ── Stage 2: Protegrity Gate 1 — protect each field individually ──────────
     # Treating the whole JSON blob as text causes numeric fields (issue numbers,
@@ -343,79 +261,15 @@ def run_slack_pipeline(
                 _unprotected["issues"] = issues  # fallback to raw
         return _unprotected["issues"]
 
-    # ── Stage 3: Semantic Guardrail scan on protected payload ─────────────────
-    if use_sgr:
-        sgr = pb.semantic_guardrail_check(protected_json, cfg=cfg)
-    else:
-        sgr = {"accepted": True, "risk_score": 0.0, "outcome": "skipped", "raw": {}}
-    # In real (non-dry-run) mode, hard-block if SGR flags the payload.
-    # In dry-run / preview mode, record the result but continue so the demo
-    # can show all pipeline steps even when guardrail flags content.
-    if use_sgr and not sgr["accepted"] and not dry_run and can_send:
-        return {
-            "ok": False,
-            "sgr_blocked": True,
-            "sgr": sgr,
-            "repo": repo,
-            "issues_found": len(issues),
-            "pii_count": pii_count,
-            "issues": issues,
-            "protected_json": protected_json,
-            "recipients": [],
-            "sent_count": 0,
-            "dry_run": dry_run,
-            "error": f"Semantic Guardrail blocked the payload — risk score {sgr['risk_score']:.2%}",
-        }
+    # ── Stage 3 + 4: Resolve users and send ───────────────────────────────────
+    client = WebClient(token=slack_token)
 
-    # ── Stage 4: Preview mode (dry_run, or Slack not connected) ──────────────
-    # Build per-recipient previews without touching the Slack API.
-    # Pre-compute unprotected issues for admin previews.
-    if dry_run or not can_send:
-        results = []
-        for rec in recipients:
-            role = rec.get("role", "viewer")
-            identifier = rec.get("identifier", "").strip()
-            display_name = rec.get("display_name") or identifier or "Preview"
-            if role == "admin":
-                preview_issues = _get_unprotected()
-                is_protected = False
-            else:
-                try:
-                    preview_issues = json.loads(protected_json)
-                except Exception:
-                    preview_issues = issues
-                is_protected = True
-            results.append({
-                "identifier": identifier,
-                "display_name": display_name,
-                "role": role,
-                "user_id": None,
-                "sent": False,
-                "protected": is_protected,
-                "error": None,
-                "preview_issues": preview_issues,
-            })
-        return {
-            "ok": True,
-            "repo": repo,
-            "issues_found": len(issues),
-            "pii_count": pii_count,
-            "issues": issues,
-            "protected_json": protected_json,
-            "sgr": sgr,
-            "dry_run": True,
-            "recipients": results,
-            "sent_count": 0,
-            "source": "composio",
-        }
-
-    # ── Stage 5: Actual Slack delivery ───────────────────────────────────
+    # Quick connection check
     try:
-        client = SlackClient()
-        bot_name = client.auth_test()
-    except cc.ComposioError as e:
-        return {"ok": False, "error": f"Slack unavailable via Composio: {e}",
-                "issues_found": len(issues), "sgr": sgr, "source": "composio"}
+        auth = client.auth_test()
+        bot_name = auth.get("user", "ProtegrityBot")
+    except SlackApiError as e:
+        return {"ok": False, "error": f"Slack auth failed: {e.response['error']}", "issues_found": len(issues)}
 
     results = []
     for rec in recipients:
@@ -439,7 +293,7 @@ def run_slack_pipeline(
             continue
 
         # Resolve Slack user
-        user_id = client.resolve_user_id(identifier)
+        user_id = _resolve_user_id(client, identifier)
         if not user_id:
             rec_result["error"] = f"Could not find Slack user '{identifier}'"
             results.append(rec_result)
@@ -460,16 +314,20 @@ def run_slack_pipeline(
             sender_note = f"Sent to {display_name} as viewer — PII remains tokenised"
 
         blocks = _build_blocks(send_issues, repo, is_protected, sender_note)
-        try:
-            channel_id = client.open_dm(user_id)
-            client.post_message(
-                channel=channel_id,
-                text=f"Top GitHub issues from {repo} ({('🔓 plain' if role == 'admin' else '🔒 protected')})",
-                blocks=blocks,
-            )
-            rec_result["sent"] = True
-        except cc.ComposioError as e:
-            rec_result["error"] = str(e)
+
+        if not dry_run:
+            try:
+                channel_id = _open_dm(client, user_id)
+                client.chat_postMessage(
+                    channel=channel_id,
+                    text=f"Top GitHub issues from {repo} ({('🔓 plain' if role == 'admin' else '🔒 protected')})",
+                    blocks=blocks,
+                )
+                rec_result["sent"] = True
+            except SlackApiError as e:
+                rec_result["error"] = e.response.get("error", str(e))
+        else:
+            rec_result["sent"] = False  # dry run
 
         results.append(rec_result)
 
@@ -480,20 +338,27 @@ def run_slack_pipeline(
         "pii_count": pii_count,
         "issues": issues,
         "protected_json": protected_json,
-        "sgr": sgr,
-        "dry_run": False,
+        "dry_run": dry_run,
         "recipients": results,
         "sent_count": sum(1 for r in results if r["sent"]),
-        "source": "composio",
     }
 
 
-def test_slack_connection() -> Dict[str, Any]:
-    """Verify the Slack toolkit is reachable through Composio."""
+def test_slack_token(slack_token: str) -> Dict[str, Any]:
+    """Quick validation of a Slack Bot Token."""
     try:
-        bot_user = SlackClient().auth_test()
-        return {"ok": True, "bot_user": bot_user, "source": "composio"}
-    except cc.ComposioError as e:
-        return {"ok": False, "error": str(e)}
+        client = WebClient(token=slack_token)
+        r = client.auth_test()
+        return {
+            "ok": True,
+            "team": r.get("team"),
+            "bot_user": r.get("user"),
+            "workspace_url": r.get("url"),
+        }
+    except SlackApiError as e:
+        err = e.response.get("error", str(e))
+        if err == "invalid_auth":
+            return {"ok": False, "error": "Invalid token — check you copied the full xoxb-… Bot Token"}
+        return {"ok": False, "error": err}
     except Exception as e:
         return {"ok": False, "error": str(e)}

@@ -29,10 +29,8 @@ class Config:
 
 
 def load_config() -> Config:
-    # COMPOSIO_API_KEY is intentionally not required: the direct-SDK pipelines
-    # work without it. composio_client.status() reports when it is missing.
     required = ["DEV_EDITION_EMAIL", "DEV_EDITION_PASSWORD", "DEV_EDITION_API_KEY",
-                "OPENAI_API_KEY"]
+                "COMPOSIO_API_KEY", "OPENAI_API_KEY"]
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
         raise EnvironmentError(f"Missing env vars: {', '.join(missing)}. Check .env file.")
@@ -43,7 +41,7 @@ def load_config() -> Config:
         classify_url=os.environ.get("CLASSIFY_URL", "http://localhost:8580/pty/data-discovery/v1.1/classify"),
         sgr_url=os.environ.get("SGR_URL", "http://localhost:8581/pty/semantic-guardrail/v1.1/conversations/messages/scan"),
         detokenize_url=os.environ.get("DETOKENIZE_URL", "http://localhost:8580/pty/data-protection/v1.1/detokenize"),
-        composio_api_key=os.environ.get("COMPOSIO_API_KEY", ""),
+        composio_api_key=os.environ["COMPOSIO_API_KEY"],
         openai_api_key=os.environ["OPENAI_API_KEY"],
         openai_model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
     )
