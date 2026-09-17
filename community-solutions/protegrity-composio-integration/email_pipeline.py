@@ -18,10 +18,11 @@ from __future__ import annotations
 import json, logging, re
 from typing import Any, Dict, List, Optional
 
+import requests as rlib
+
 from config import Config, load_config
 import protegrity_bridge as pb
-import composio_bridge as cc
-from gmail_client import GmailClient
+from gmail_agent import GmailClient
 from pipeline import fetch_github_issues, _slim_issue
 
 logger = logging.getLogger(__name__)
@@ -85,24 +86,23 @@ def _fmt_issue(issue: Dict) -> str:
     return "\n".join(lines)
 
 
-def _fetch_specific(repo: str, numbers: List[int]) -> List[Dict]:
-    """Fetch named issue numbers via Composio, skipping any that fail."""
-    from pipeline import GITHUB_GET_ISSUE_TOOLS
-    owner, name = repo.split("/", 1)
+def _fetch_specific(repo: str, numbers: List[int], token: Optional[str]) -> List[Dict]:
+    hdrs = {"Accept": "application/vnd.github.v3+json", "User-Agent": "ProtegrityDemo/1.0"}
+    if token:
+        hdrs["Authorization"] = f"token {token}"
     out = []
     for n in numbers[:5]:
-        try:
-            out.append(cc.execute_first(
-                GITHUB_GET_ISSUE_TOOLS,
-                {"owner": owner, "repo": name, "issue_number": n},
-            ))
-        except cc.ComposioError as e:
-            logger.warning("Issue #%d from %s failed: %s", n, repo, e)
+        r = rlib.get(f"https://api.github.com/repos/{repo}/issues/{n}", headers=hdrs, timeout=10)
+        if r.ok:
+            out.append(r.json())
+        else:
+            logger.warning("Issue #%d from %s returned %s", n, repo, r.status_code)
     return out
 
 
 def run_email_pipeline(
     gmail_client: GmailClient,
+    github_token: Optional[str],
     cfg: Config,
     default_repo: str = "",
     dry_run: bool = False,
@@ -121,7 +121,7 @@ def run_email_pipeline(
     emails = gmail_client.fetch_unread_recent(hours=24)
     if not emails:
         return {"emails_found": 0, "processed": [],
-                "replies_sent": 0, "errors": 0, "source": "composio",
+                "replies_sent": 0, "errors": 0,
                 "message": "No unread emails in the last 24 hours."}
 
     processed = []
@@ -152,9 +152,9 @@ def run_email_pipeline(
 
             # Stage 3 – GitHub
             if intent["action"] == "specific_issues" and intent["issue_numbers"]:
-                raw = _fetch_specific(repo, intent["issue_numbers"])
+                raw = _fetch_specific(repo, intent["issue_numbers"], github_token)
             else:
-                raw = fetch_github_issues(repo, limit=intent["count"])
+                raw = fetch_github_issues(repo, github_token, limit=intent["count"])
 
             issues = [_slim_issue(i) for i in raw]
             result["issues_fetched"] = len(issues)
@@ -211,5 +211,4 @@ def run_email_pipeline(
         "processed": processed,
         "replies_sent": sum(1 for r in processed if r["reply_sent"]),
         "errors": sum(1 for r in processed if r["error"]),
-        "transport": {"gmail": gmail_transport, "github": github_transport},
     }

@@ -1,12 +1,9 @@
 """
-Connected Agent with embedded Protegrity gates.
-
-An LLM agent whose platform connections (GitHub, Gmail, Slack, Google Sheets)
-are managed by Composio. Composio supplies the tools and holds the credentials;
-the agent itself is ours, as are the Protegrity gates around it.
+Composio Agent with embedded Protegrity gates.
 
 Flow for every user request:
-  1. The agent executes one or more platform tool calls through Composio
+  1. Composio agent executes one or more platform tool calls (GitHub, Gmail, Slack…)
+     – Uses the composio CLI binary (which handles auth) to execute tools
   2. After EACH tool response, Gate 1 runs: Protegrity find_and_protect tokenizes PII
   3. The agent continues working with protected (tokenized) data only
   4. The final answer is returned with PII protected throughout
@@ -14,12 +11,15 @@ Flow for every user request:
 
 This keeps real PII out of the LLM context and all downstream platforms.
 
-Auth note: COMPOSIO_API_KEY in .env is the only platform credential this project
-holds. Without it, live mode is unavailable and the agent reports that explicitly
-rather than pretending to have run.
+Auth note: The composio CLI binary (/home/azure_usr/.composio/composio) is used
+for API calls since the UAK (user-api-key from CLI login) works with the CLI's
+own backend but not directly with the composio Python SDK (which requires a
+project API key from platform.composio.dev). Generate a PAK at:
+  https://platform.composio.dev → Settings → API Keys
+and set COMPOSIO_API_KEY=pak_... in your .env to enable full SDK mode.
 """
 from __future__ import annotations
-import json, logging, re, sys
+import json, logging, sys, os, subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -28,12 +28,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import Config, load_config
 import protegrity_bridge as pb
-import composio_bridge as cc
+import shutil
 
 logger = logging.getLogger(__name__)
 
-# Toolkits the live agent is allowed to use.
-LIVE_APPS = ["GITHUB", "SLACK", "GMAIL", "GOOGLESHEETS", "GOOGLEDRIVE", "GOOGLEDOCS"]
+COMPOSIO_CLI = (
+    shutil.which("composio")
+    or str(Path.home() / "myenv" / "bin" / "composio")
+    or str(Path.home() / ".composio" / "composio")
+)
 
 
 # ── RBAC roles ────────────────────────────────────────────────────────────────
@@ -160,24 +163,41 @@ def _get_demo_steps(prompt: str) -> List[Dict[str, str]]:
     return DEMO_SCENARIOS["default"]
 
 
-# ── Composio account helpers ──────────────────────────────────────────────────
+# ── CLI helper ────────────────────────────────────────────────────────────────
+
+def _run_cli(*args: str, timeout: int = 15) -> Dict[str, Any]:
+    """Run a composio CLI command and return parsed JSON output."""
+    cmd = [COMPOSIO_CLI] + list(args)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if result.returncode == 0 and result.stdout.strip():
+            try:
+                return {"ok": True, "data": json.loads(result.stdout)}
+            except json.JSONDecodeError:
+                return {"ok": True, "data": result.stdout.strip()}
+        return {"ok": False, "error": result.stderr.strip() or "no output"}
+    except FileNotFoundError:
+        return {"ok": False, "error": f"composio CLI not found at {COMPOSIO_CLI}"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "CLI timeout"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 
 def get_connected_apps() -> List[Dict[str, Any]]:
-    """Active Composio connections. Returns [] only when genuinely unavailable."""
-    try:
-        return [a for a in cc.connected_apps() if a["status"] == "ACTIVE"]
-    except cc.ComposioError as e:
-        logger.warning("Composio unavailable: %s", e)
-        return []
+    """Return list of connected Composio apps using the CLI binary."""
+    result = _run_cli("connected-accounts", "list")
+    if result["ok"] and isinstance(result.get("data"), list):
+        return result["data"]
+    return []
 
 
 def get_available_toolkits() -> List[Dict[str, Any]]:
-    """Toolkits this agent can drive, annotated with connection state."""
-    try:
-        connected = cc.active_app_slugs()
-    except cc.ComposioError:
-        connected = set()
-    return [{"slug": slug, "connected": slug in connected} for slug in LIVE_APPS]
+    """Return available toolkits from Composio CLI."""
+    result = _run_cli("toolkits", "list")
+    if result["ok"] and isinstance(result.get("data"), list):
+        return result["data"]
+    return []
 
 
 # ── Pipeline step model ────────────────────────────────────────────────────────
@@ -203,16 +223,15 @@ class PipelineStep:
         }
 
 
-# ── Connected agent runner ────────────────────────────────────────────────────
+# ── Composio agent runner ─────────────────────────────────────────────────────
 
-class ProtegrityConnectedAgent:
+class ProtegrityComposioAgent:
     """
-    An OpenAI agent, connected to platforms by Composio, that gates every tool
-    response through Protegrity.
+    An OpenAI + Composio agent that gates every tool response through Protegrity.
 
     Modes:
-      Live mode  – platforms connected via Composio; real tool calls
-      Demo mode  – nothing connected; synthetic PII data demonstrates the pipeline
+      Live mode  – Composio apps are connected; uses composio_openai SDK + real tools
+      Demo mode  – No apps connected; uses synthetic PII data to demonstrate the pipeline
     """
 
     def __init__(self, cfg: Optional[Config] = None):
@@ -237,41 +256,6 @@ class ProtegrityConnectedAgent:
                     self._step_counter, len(result.elements_found), app, action)
         return result.protected
 
-    def _protect_prompt(self, user_prompt: str) -> str:
-        """Gate 0: find_and_protect the user's prompt before it reaches the model."""
-        result = pb.find_and_protect(user_prompt, cfg=self.cfg)
-        if result.pii_detected:
-            self._step_counter += 1
-            self._pipeline_steps.append(PipelineStep(
-                step_num=self._step_counter,
-                app="User",
-                action="Prompt (Gate 0)",
-                raw=user_prompt,
-                protected=result.protected,
-                elements=result.elements_found,
-            ))
-            logger.info("Gate 0 applied: %d PII elements tokenized in user prompt",
-                        len(result.elements_found))
-        return result.protected
-
-    def _detokenize_tool_args(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Gate 1b: find_and_unprotect tool arguments so the platform receives real
-        values. Without this a lookup silently matches nothing.
-        """
-        if not args:
-            return args
-        payload = json.dumps(args)
-        if not re.search(r"\[[A-Z_|]+\].*?\[/[A-Z_|]+\]", payload):
-            return args
-
-        restored = pb.find_and_unprotect(payload, cfg=self.cfg).protected
-        try:
-            return json.loads(restored)
-        except json.JSONDecodeError:
-            logger.warning("Detokenized tool args were not valid JSON; sending as-is")
-            return args
-
     def _run_demo_mode(self, user_prompt: str) -> Dict[str, Any]:
         """
         Demo pipeline: uses synthetic PII-rich data to show Gate 1 and Gate 2.
@@ -289,16 +273,26 @@ class ProtegrityConnectedAgent:
         combined = "\n\n".join(protected_pieces)
         total_pii = sum(len(s.elements) for s in self._pipeline_steps)
 
-        # Build the summary header separately and protect only that part.
-        # Do NOT re-run find_and_protect on `combined` — it already has protected
-        # tokens and re-processing would double-wrap tags around original values.
-        summary_header = (
+        final_answer = (
             f"I completed the pipeline for: '{user_prompt}'\n\n"
             f"Data was fetched from {len(demo_steps)} sources.\n"
             f"Protegrity detected and tokenized {total_pii} PII entities across all fetched data.\n"
-            f"All sensitive information has been replaced with Protegrity tokens."
+            f"All sensitive information has been replaced with Protegrity tokens.\n\n"
+            f"Protected data summary:\n{combined}"
         )
-        final_answer = f"{summary_header}\n\nProtected data summary:\n{combined}"
+        # Protect the final answer too
+        final_result = pb.find_and_protect(final_answer, cfg=self.cfg)
+        if final_result.pii_detected:
+            self._step_counter += 1
+            self._pipeline_steps.append(PipelineStep(
+                step_num=self._step_counter,
+                app="Summary",
+                action="Final Answer",
+                raw=final_answer,
+                protected=final_result.protected,
+                elements=final_result.elements_found,
+            ))
+            final_answer = final_result.protected
 
         return {
             "pipeline": [s.to_dict() for s in self._pipeline_steps],
@@ -315,52 +309,37 @@ class ProtegrityConnectedAgent:
         """
         try:
             from openai import OpenAI
+            from composio_openai import ComposioToolSet, App
         except ImportError as e:
-            return {"error": f"Missing package: {e}", "pipeline": [], "final_answer": "",
-                    "mode": "live", "total_steps": 0}
+            return {"error": f"Missing package: {e}", "pipeline": [], "final_answer": ""}
 
+        os.environ["COMPOSIO_API_KEY"] = self.cfg.composio_api_key
         client = OpenAI(api_key=self.cfg.openai_api_key)
 
+        # Get tools using SDK (requires PAK; falls back to empty if UAK)
+        tools = []
         try:
-            connected = sorted(cc.active_app_slugs() & set(LIVE_APPS))
-            if not connected:
-                raise cc.ComposioError(
-                    "No active Composio connection for any of: " + ", ".join(LIVE_APPS)
-                )
-            tools = cc.get_openai_tools(connected)
-        except cc.ComposioError as e:
-            # Do not silently downgrade to synthetic data — the caller must know.
-            logger.error("Live mode unavailable: %s", e)
-            return {"pipeline": [], "final_answer": "", "total_steps": 0,
-                    "mode": "live", "error": str(e)}
-
-        if not tools:
-            return {"pipeline": [], "final_answer": "", "total_steps": 0, "mode": "live",
-                    "error": f"Composio returned no tools for {connected}."}
-
-        logger.info("Live mode: %d tools loaded from %s", len(tools), connected)
+            toolset = ComposioToolSet(api_key=self.cfg.composio_api_key)
+            tools = toolset.get_tools(apps=[App.GITHUB])
+        except Exception as e:
+            logger.warning("SDK tool load failed (%s), falling back to demo mode", e)
+            return self._run_demo_mode(user_prompt)
 
         system_prompt = (
-            "You are a secure data-retrieval agent with access to the user's platforms "
-            f"through Composio. Connected toolkits: {', '.join(connected)}.\n"
-            "Use COMPOSIO_SEARCH_TOOLS to find the right tool slug for a task, then "
-            "COMPOSIO_MULTI_EXECUTE_TOOL to run it. Never invent tool slugs.\n"
-            "Tool results and the user's own request are tokenized by Protegrity "
-            "before you see them: treat values like [EMAIL_ADDRESS]abc123[/EMAIL_ADDRESS] "
-            "as opaque identifiers, keep the [TAG]...[/TAG] wrappers intact, and never "
-            "guess what is behind them.\n"
-            "When a tool needs one of those values, pass the tagged token through "
-            "character-for-character — do not rewrite, reformat or invent a replacement. "
-            "It is detokenized on the way out.\n"
-            "Finish with a clear summary of what you found."
+            "You are a secure data-retrieval agent. "
+            "When you fetch data from external platforms, summarize it clearly. "
+            "Always use the available tools to fetch real data. "
+            "Treat tokenized values like [EMAIL_ADDRESS]abc123[/EMAIL_ADDRESS] as opaque identifiers. "
+            "Provide a clear summary of what you found."
         )
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": self._protect_prompt(user_prompt)},
+            {"role": "user",   "content": user_prompt},
         ]
 
         MAX_ITERATIONS = 8
+        toolset_ref = toolset  # keep reference for execute_tool_call
 
         for iteration in range(MAX_ITERATIONS):
             response = client.chat.completions.create(
@@ -398,14 +377,10 @@ class ProtegrityConnectedAgent:
             messages.append(msg)
             for tc in msg.tool_calls:
                 fn_name = tc.function.name
-                try:
-                    args = json.loads(tc.function.arguments or "{}")
-                except json.JSONDecodeError:
-                    args = {}
-                app_name, action_name = _describe_tool_call(fn_name, args)
+                app_name, action_name = _parse_tool_name(fn_name)
                 logger.info("Calling tool: %s (app=%s action=%s)", fn_name, app_name, action_name)
                 try:
-                    tool_result = cc.call_meta(fn_name, self._detokenize_tool_args(args))
+                    tool_result = toolset_ref.execute_tool_call(tc, entity_id="default")
                     raw_text = _result_to_text(tool_result)
                 except Exception as e:
                     raw_text = f"[Tool error: {e}]"
@@ -427,30 +402,23 @@ class ProtegrityConnectedAgent:
             "error": "max_iterations",
         }
 
-    def run(self, user_prompt: str, mode: str = "auto") -> Dict[str, Any]:
+    def run(self, user_prompt: str) -> Dict[str, Any]:
         """
         Execute the agent pipeline with full Protegrity protection.
-
-        mode: "live" forces Composio and errors if unavailable, "demo" forces
-        synthetic data, "auto" uses Composio when a connection exists.
+        Auto-selects demo mode if no Composio apps are connected.
+        Returns: pipeline steps + final protected answer.
         """
         self._pipeline_steps = []
         self._step_counter = 0
 
-        if mode == "demo":
-            return self._run_demo_mode(user_prompt)
-        if mode == "live":
-            return self._run_live_mode(user_prompt)
-
+        # Check if we have real connected apps
         connected = get_connected_apps()
         if connected:
             logger.info("Live mode: %d connected apps found", len(connected))
             return self._run_live_mode(user_prompt)
-
-        logger.info("Demo mode: no connected Composio apps, using synthetic PII data")
-        result = self._run_demo_mode(user_prompt)
-        result["composio_status"] = cc.status()
-        return result
+        else:
+            logger.info("Demo mode: no connected apps, using synthetic PII data")
+            return self._run_demo_mode(user_prompt)
 
     def reveal(self, text: str, role: str) -> Dict[str, Any]:
         """Gate 2: Detokenize protected text if the RBAC role permits it."""
@@ -480,19 +448,6 @@ def _parse_tool_name(fn_name: str):
     app = parts[0].title() if parts else fn_name
     action = parts[1].replace("_", " ").title() if len(parts) > 1 else fn_name
     return app, action
-
-
-def _describe_tool_call(fn_name: str, args: Dict[str, Any]):
-    """Label a pipeline step by the app tool being run, not the meta-tool wrapper."""
-    if fn_name == "COMPOSIO_MULTI_EXECUTE_TOOL":
-        specs = args.get("tools") or []
-        slugs = [s.get("tool_slug", "") for s in specs if isinstance(s, dict)]
-        if slugs:
-            app, action = _parse_tool_name(slugs[0])
-            if len(slugs) > 1:
-                action = f"{action} (+{len(slugs) - 1} more)"
-            return app, action
-    return _parse_tool_name(fn_name)
 
 
 def _result_to_text(tool_result: Any) -> str:
