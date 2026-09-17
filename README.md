@@ -8,8 +8,7 @@
 [![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black)](https://www.linux.org/)
 [![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat&logo=windows&logoColor=white)](https://www.microsoft.com/windows/)
 [![macOS](https://img.shields.io/badge/mac%20os-000000?style=flat&logo=macos&logoColor=F0F0F0)](https://www.apple.com/macos/)
-[![PyPI 1.2.1](https://img.shields.io/pypi/v/protegrity-ai-developer-python.svg)](https://pypi.org/project/protegrity-ai-developer-python/)
-[![Anaconda 1.2.1](https://anaconda.org/protegrity/protegrity-ai-developer-python/badges/version.svg?style=flat)](https://anaconda.org/protegrity/protegrity-ai-developer-python)
+[![PyPI 1.2.2](https://img.shields.io/pypi/v/protegrity-ai-developer-python.svg)](https://pypi.org/project/protegrity-ai-developer-python/)
 [![Maven Central 1.1.0](https://img.shields.io/maven-central/v/com.protegrity/protegrity-ai-developer-edition.svg?style=flat)](https://search.maven.org/artifact/com.protegrity/protegrity-ai-developer-edition)
 [![Service Health](https://img.shields.io/badge/service-health-brightgreen.svg?style=flat&logo=statuspage&logoColor=white)](https://www.protegrity.com/developers/status)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Protegrity-AI-Developer-Edition/protegrity-ai-developer-edition)
@@ -163,7 +162,7 @@ The version number of the AI Developer Edition features are provided here for re
 -   Semantic Guardrails: 1.1.1
 -   Synthetic Data: 2.0.0
 -   Anonymization: 2.0.0
--   Python SDK: 1.2.1
+-   Python SDK: 1.2.2
 -   Java SDK: 1.1.0
 
 ## 🛠️ Getting Started
@@ -369,7 +368,7 @@ MacOS requires additional steps for Docker and for systems with Apple Silicon ch
 
 Edit `shared/config.json` to customize SDK behavior.
 Keys:
-- `named_entity_map`: Optional mappings (friendly labels) used during protect/mask. [Supported Classification Entities](https://developer.docs.protegrity.com/docs/entities/)
+- `named_entity_map`: Optional mappings (friendly labels) used during protect/mask. [Supported Classification Entities](https://developer.docs.protegrity.com/docs/addinfo/entities/)
 - `method`: `redact` (remove) or `mask` (replace with masking char).
 - `masking_char`: Character for masking (when `method` = mask).
 - `classification_score_threshold`: Minimum confidence (default 0.6 if omitted).
